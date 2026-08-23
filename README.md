@@ -376,5 +376,3 @@ Pour les communes sans données (< 10 transactions) :
 | region | 252 | ~4 760 |
 | department | 1 344 | ~27 160 |
 | city | ~500 000 | ~1 200 000 |
-#   i m m o - d a t a - s c i e n c e  
- 
