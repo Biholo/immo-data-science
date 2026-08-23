@@ -1,0 +1,6 @@
+duckdb>=0.10.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+tqdm>=4.0
+rich>=13.0
+plotext>=5.0

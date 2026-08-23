@@ -56,14 +56,35 @@ immo-data-science/
 │   ├── ml_run_reporting.ps1      # (4/4) figures mémoire + recap pass/fail
 │   └── ml_run_full_pipeline.ps1  # enchaîne 1→4
 ├── memoire/redaction/latest/  # visuels retenus pour la rédaction (régénéré par ml/scripts/collect_memoire_visuals.py)
-├── dvf-raw/               # fichiers DVF bruts .txt (non versionné)
-├── csv/                   # fichiers source INSEE
-│   ├── base-ic-activite-residents-2022.xlsx
-│   └── fr-esr-atlas_regional-effectifs-d-etudiants-inscrits_agregeables.csv
+├── dvf-raw/               # fichiers DVF bruts .txt — VIDE dans ce repo, voir "Sources de données"
+├── csv/                   # fichiers source INSEE/DHUP/ANIL/DGFiP — VIDE dans ce repo, voir "Sources de données"
 ├── dvf_cache.duckdb       # cache DuckDB (non versionné)
 ├── .env                   # DATABASE_URL (non versionné)
 └── requirements.txt
 ```
+
+---
+
+## Sources de données
+
+`dvf-raw/` et `csv/` sont vides dans ce repo (fichiers sources trop volumineux — 3,8 Go
+cumulés — et déjà librement téléchargeables). Structure des dossiers conservée
+(`.gitkeep`) : à toi de déposer chaque fichier au bon endroit avant de lancer le pipeline.
+
+| Source | Lien de téléchargement | Emplacement attendu | Consommé par |
+|---|---|---|---|
+| DVF (Demandes de valeurs foncières), DGFiP | [cadastre.data.gouv.fr/dvf](https://cadastre.data.gouv.fr/dvf) | `dvf-raw/ValeursFoncieres-{2021..2025}.txt` | `pipeline/services/dvf.py` |
+| INSEE IC — Activité des résidents 2022 | [insee.fr/fr/statistiques/8647006](https://www.insee.fr/fr/statistiques/8647006) | `csv/base-ic-activite-residents-2022.xlsx` + historique 2017-2021 dans `csv/base-ic-activite-residents/*.CSV` | `pipeline/scripts/seed_rp.py`, `seed_rp_series.py`, `seed_employment_series.py` |
+| INSEE IC — Logement 2017-2022 | [insee.fr/fr/statistiques/8647012](https://www.insee.fr/fr/statistiques/8647012) | `csv/base-ic-logement/*.CSV` | `pipeline/scripts/seed_logement_series.py` |
+| INSEE IC — Évolution structure population 2017-2022 | [insee.fr/fr/information/2383389](https://www.insee.fr/fr/information/2383389) | `csv/base-ic-evol-struct-pop/*.CSV` | `pipeline/scripts/seed_pop_series.py` |
+| geo.api.gouv.fr (API live, pas de fichier) | [geo.api.gouv.fr/communes](https://geo.api.gouv.fr/communes) | — appelée directement au run | `pipeline/scripts/seed_cities.py` |
+| DHUP — Zonage ABC (Île-de-France uniquement) | [data.gouv.fr — zonage ABC](https://www.data.gouv.fr/datasets/logement-liste-des-communes-selon-le-zonage-abc) | `csv/logement-liste-des-communes-selon-le-zonage-abc.csv` | `pipeline/scripts/seed_housing_zone.py` |
+| Zonage ABC national (remplace la version IDF-only côté `ml/`) | [data.gouv.fr — zonage ABC national](https://www.data.gouv.fr/datasets/liste-des-communes-selon-le-zonage-abc) | `csv/zonage-abc-national.csv` | `ml/data/zonage_national.py` |
+| ESR — effectifs étudiants (legacy, supplanté par INSEE RP) | [data.enseignementsup-recherche.gouv.fr](https://data.enseignementsup-recherche.gouv.fr) | `csv/fr-esr-atlas_regional-effectifs-d-etudiants-inscrits_agregeables.csv` | `pipeline/scripts/seed_students.py` (optionnel) |
+| INSEE Filosofi 2021 — revenus, pauvreté, niveau de vie | [insee.fr/fr/statistiques/7756729](https://www.insee.fr/fr/statistiques/7756729) (`base-cc-filosofi-2021-geo2025_csv.zip`) | `csv/DS_FILOSOFI_CC_data.csv` | `ml/data/median_income.py` |
+| Carte des loyers 2025, ANIL/DHUP | [data.gouv.fr — Carte des loyers](https://www.data.gouv.fr/datasets/carte-des-loyers-indicateurs-de-loyers-dannonce-par-commune-en-2025) | `csv/loyers/*.csv` (4 fichiers, noms exacts dans `ml/data/rent.py`) | `ml/data/rent.py` |
+| DGFiP — Fiscalité locale des particuliers | [data.gouv.fr — fiscalité locale](https://www.data.gouv.fr/datasets/fiscalite-locale-des-particuliers) | `csv/fiscalite/fiscalite-locale-des-particuliers.csv` | `ml/data/property_tax.py` |
+| INSEE — Grille communale de densité 2024 | [insee.fr/fr/information/6439600](https://www.insee.fr/fr/information/6439600) | `csv/grille-densite-communale-2024.xlsx` | `ml/data/density_grid.py` |
 
 ---
 
