@@ -208,9 +208,8 @@ def make_map(df: pd.DataFrame, value_col: str, national_median: float, run_dir: 
     mesh = ax.pcolormesh(lon_mesh, lat_mesh, grid_values, cmap=cmap, norm=norm, shading="gouraud")
     cbar = fig.colorbar(mesh, ax=ax, shrink=0.7)
     cbar.set_label(cbar_label, fontsize=9)
-    ax.set_xlabel("Longitude")
-    ax.set_ylabel("Latitude")
-    ax.set_title(title, fontsize=11, linespacing=1.8)
+    ax.set_xticks([])
+    ax.set_yticks([])
     ax.set_aspect("equal")
     save(fig, run_dir / filename)
 
