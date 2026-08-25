@@ -210,6 +210,8 @@ def make_map(df: pd.DataFrame, value_col: str, national_median: float, run_dir: 
     cbar.set_label(cbar_label, fontsize=9)
     ax.set_xticks([])
     ax.set_yticks([])
+    ax.spines["bottom"].set_visible(False)
+    ax.spines["left"].set_visible(False)
     ax.set_aspect("equal")
     save(fig, run_dir / filename)
 
