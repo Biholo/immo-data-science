@@ -16,3 +16,7 @@ csv/*
 !csv/.gitkeep
 csv/*/*
 !csv/*/.gitkeep
+
+# POI ingestion working files — throwaway, re-downloaded on demand (see README "POI (OpenStreetMap)")
+csv/poi/*.osm.pbf
+csv/poi/communes-contours*.geojson

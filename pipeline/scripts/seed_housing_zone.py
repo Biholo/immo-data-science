@@ -2,18 +2,35 @@
 Seed housing_zone (zonage ABC tension locative) into cities table.
 Also derives high_demand_zone = housing_zone IN (A, A_BIS).
 
-Source: logement-liste-des-communes-selon-le-zonage-abc.csv
-  Col 0: Code commune (INSEE)
+Source (default, national coverage): csv/zonage-abc-national.csv
+  CODGEO;DEP;LIBGEO;Zonage ABC en vigueur depuis le 26 juin 2026
+  Col 0: Code commune (INSEE, déjà consolidé pour Paris/Lyon/Marseille —
+         75056/69123/13055, pas de lignes par arrondissement individuel,
+         donc pas besoin de pipeline.services.geo.ARR_TO_COMMUNE ici)
   Col 1: Département
   Col 2: Commune (nom)
   Col 3: Zonage en vigueur (A, Abis, B1, B2, C)
-  Col 4: Reclassement (Oui/Non) — ignoré
 
-Note: fichier source = Île-de-France uniquement (75,77,78,91,92,93,94,95).
-Pas de zone C dans ce fichier (IDF = zone tendue partout).
+Downloaded from https://www.data.gouv.fr/api/1/datasets/r/13f7282b-8a25-43ab-9713-8bb4e476df55
+(dataset: https://www.data.gouv.fr/datasets/liste-des-communes-selon-le-zonage-abc).
+Re-verified live on 2026-09-10: current revision = arrêté du 23 juin 2026, en
+vigueur depuis le 26 juin 2026, dataset last updated 2026-07-03 on data.gouv.fr.
+34875/34969 communes covered (vs ~1266 with the old IDF-only file below) — this
+zonage is revised periodically (e.g. arrêté du 5 septembre 2025 before this one),
+so re-download from the same data.gouv.fr dataset page periodically to stay current.
+
+Legacy source (Île-de-France only, kept for --csv override / historical
+reference — DO NOT use as default, it undercounts by ~33.6k communes):
+  csv/logement-liste-des-communes-selon-le-zonage-abc.csv
+  Same column layout (code, dept, commune, zone, ...). Covers only
+  75/77/78/91/92/93/94/95. No zone C in that file (IDF = zone tendue partout).
+
+The zone-column header text changes with each arrêté ("Zonage ... depuis le
+<date>"), so it is located by prefix match ("Zonage") rather than a fixed
+index — this also makes the parser source-agnostic between the two files above.
 
 Run:
-  python -m pipeline.scripts.seed_housing_zone [--csv path] [--dry-run]
+  python -m pipeline.scripts.seed_housing_zone [--csv path] [--dept XX] [--dry-run]
 """
 
 from __future__ import annotations
@@ -32,9 +49,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_CSV = str(
-    Path(__file__).parent.parent.parent
-    / "csv"
-    / "logement-liste-des-communes-selon-le-zonage-abc.csv"
+    Path(__file__).parent.parent.parent / "csv" / "zonage-abc-national.csv"
 )
 
 ZONE_MAP = {
@@ -49,14 +64,26 @@ HIGH_DEMAND_ZONES = {"A", "A_BIS"}
 
 
 def load_zones(csv_path: str) -> dict[str, str]:
-    """Returns {insee_code: zone_enum_value}."""
+    """Returns {insee_code: zone_enum_value}.
+
+    Zone column is located by header prefix ("Zonage...") rather than a fixed
+    index, since the header text embeds the arrêté date and changes at each
+    revision — this works unchanged against both the national file and the
+    legacy IDF-only file (both put code in col 0, zone in col 3).
+    """
     zones: dict[str, str] = {}
     with open(csv_path, encoding="utf-8-sig") as f:
         reader = csv.reader(f, delimiter=";")
-        next(reader)  # header
+        header = next(reader)
+        zone_candidates = [i for i, h in enumerate(header) if h.strip().startswith("Zonage")]
+        if not zone_candidates:
+            raise ValueError(f"No 'Zonage...' column found in {csv_path} header: {header}")
+        i_zone = zone_candidates[0]
         for row in reader:
+            if not row or not row[0].strip():
+                continue
             code = row[0].strip().zfill(5)
-            raw_zone = row[3].strip()
+            raw_zone = row[i_zone].strip()
             zone = ZONE_MAP.get(raw_zone)
             if zone:
                 zones[code] = zone

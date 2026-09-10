@@ -81,13 +81,8 @@ uniquement pour les données de flux d'annonces (délais, stock).
 | `sale_time_t2` | idem |
 | `sale_time_t3` | idem |
 | `sale_time_t4` | idem |
-| `listings_count_t1..t4` | Stock d'annonces actives à un instant T — n'existe dans aucun open data, seulement observable en scrapant les plateformes d'annonces (SeLoger, LeBonCoin, PAP...). |
 
-**Cas particulier `rental_tension_score`** : pas listé ci-dessus car composite. Deux options :
-- **Proxy Moyen** (pas de scraping) : construire un score à partir de champs déjà/bientôt dispo — `vacancy_rate` (bas = tendu), `housing_zone` DHUP (A/Abis = tendu), croissance population, ratio `owner_rate`. Approximatif mais 100% open data.
-- **Version scraping (Difficile)** : score réel basé sur `listings_count` + `search_time`/`sale_time` — nécessite les 9 courbes scraping ci-dessus d'abord.
-
-Recommandation : démarrer avec la version proxy (Moyen) tant que le scraping n'existe pas, documenter clairement la limite méthodologique dans le mémoire.
+**Retirés du périmètre (2026-09-10)** : `listings_count_t1..t4`, `rental_tension_score`, `supply_demand_ratio` (série/champ), `properties_for_sale` (champ) — supprimés de `serie.prisma` / `city.prisma`, ne doivent pas apparaître dans les graphiques.
 
 ---
 
@@ -106,7 +101,7 @@ vérifier qu'une année plus récente n'a pas été publiée depuis.
 | INSEE IRIS — "Logement en 2022" | https://www.insee.fr/fr/statistiques/8647012 | `secondary_residence_rate`, `social_housing_rate`, `owner_rate`, `vacancy_rate` | `csv/base-ic-logement/` |
 | INSEE IRIS — "évolution structure population" | https://www.insee.fr/fr/information/2383389 (portail, même famille) | `population`, `aging_index`, tranches d'âge détaillées | `csv/base-ic-evol-struct-pop/` |
 | geo.api.gouv.fr | https://geo.api.gouv.fr/communes | Backbone communes (coords, code INSEE, population) | appelée par `seed_cities.py` |
-| DHUP — Zonage A/Abis/B1/B2/C | https://www.data.gouv.fr/datasets/logement-liste-des-communes-selon-le-zonage-abc | `housing_zone`, `highDemandZone`, base d'`eligibleZones` | `csv/logement-liste-des-communes-selon-le-zonage-abc.csv` |
+| DHUP — Zonage A/Abis/B1/B2/C (national) | https://www.data.gouv.fr/datasets/liste-des-communes-selon-le-zonage-abc | `housing_zone`, `highDemandZone` | `csv/zonage-abc-national.csv` |
 | ESR — effectifs étudiants | data.enseignementsup-recherche.gouv.fr | `studentCount` (source alternative, supplantée par INSEE RP) | `csv/fr-esr-atlas_regional-effectifs-d-etudiants-inscrits_agregeables.csv` |
 
 ### 5.2 Pas encore — à télécharger/intégrer
@@ -139,7 +134,6 @@ Correspond aux champs `camelCase` évoqués plus tôt (dashboard), distincts des
 | `demographicGrowth5y` | Facile | Calcul sur série `population` déjà en base (INSEE IC évol-struct-pop, cf. §5). Pas de source externe. |
 | `employmentGrowth` | Facile | Champ `ACT1564` déjà présent dans le fichier INSEE "activité résidents" (cf. §5) déjà téléchargé — juste à extraire en série annuelle. |
 | `avgPropertyTax` | Facile (nouvelle source, pattern connu) | data.economie.gouv.fr / collectivites-locales.gouv.fr, cf. §5. |
-| `eligibleZones` (Pinel) | Facile (nouvelle source, pattern connu) | Réutilise le zonage DHUP A/Abis/B1/B2/C (cf. §5) — Pinel suit ce même zonage. |
 | `rentControl` | Facile (source fragmentée) | ANIL (anil.org) ou service-public.fr, liste des ~25 villes sous encadrement, arrêtés préfectoraux. |
 | `medianAge` | Facile (nouvelle source, pattern connu) | Fichier INSEE IC "évolution structure population" déjà téléchargé (cf. §5) — tranches d'âge détaillées présentes, interpolation à coder. |
 | `highSpeedRailOrAirport` | Facile (nouvelle source, pattern connu) | data.sncf.com (gares) + data.gouv.fr (aéroports DGAC), croisement géo via coords déjà en base. |
@@ -156,8 +150,8 @@ Correspond aux champs `camelCase` évoqués plus tôt (dashboard), distincts des
 | Acquis | 21 | rien |
 | Facile | 2 | calcul, pas de nouvelle donnée |
 | Moyen | 7 | 3 nouvelles sources open data (Filosofi, Sirene, Carte des loyers) + dérivés |
-| Difficile (scraping) | 9 | infra scraping à construire (absente du repo actuel) |
-| Composite (proxy possible) | 1 (`rental_tension_score`) | version Moyen dispo immédiatement, version fine nécessite scraping |
+| Difficile (scraping longitudinal) | 8 | `search_time_t*`, `sale_time_t*` / `avgSaleDays` — table d'observations + cron |
+| Retirés du périmètre (2026-09-10) | 4 | `listings_count_t*`, `rental_tension_score`, `supply_demand_ratio`, `properties_for_sale` |
 
 **Total sans scraping atteignable : 30/39** (21 acquis + 2 facile + 7 moyen). Les 9 restants
 (délais + stock d'annonces) sont structurellement bloqués sans scraping — aucune agence
@@ -175,15 +169,15 @@ en dernier (plus gros chantier, aucune dépendance amont).
 - [x] `tenantRate` = `1 - owner_rate` → `seed_dashboard_fields.py`
 - [x] `highDemandZone` = bool depuis `housing_zone` (A/A_bis) → `seed_housing_zone.py`
 - [x] `demographicGrowth5y` = calcul sur série `population` existante, fenêtre 5 ans → `seed_dashboard_fields.py`
-- [x] `employmentGrowth` = extraction `ACT1564` (`seed_employment_series.py`, série `active_population`) + calcul 5 ans → `seed_dashboard_fields.py`. ⚠️ ajouter `active_population` à l'enum Postgres `SerieName` avant le premier run réel.
-- [ ] `rental_tension_score` (version proxy) — **hors périmètre pour l'instant** (décision explicite, pas de formule figée)
+- [x] `employmentGrowth` = extraction `ACT1564` (`seed_employment_series.py`, série `active_population`) + calcul 5 ans → `seed_dashboard_fields.py`. `active_population` ajouté à `serie.prisma` le 2026-09-10 — migration Prisma à appliquer.
+- [x] `rental_tension_score` — **retiré du périmètre** (2026-09-10), supprimé du schéma
 
 ### Phase 2 — Sources faciles, pattern seed script identique à l'existant
-- [ ] `eligibleZones` (Pinel) — réutiliser directement le fichier zonage DHUP déjà en base, pas de nouveau téléchargement
-- [ ] `medianAge` — extraire tranches d'âge du fichier INSEE `base-ic-evol-struct-pop` déjà téléchargé, coder l'interpolation
-- [ ] `avgPropertyTax` — télécharger CSV DGFiP/DGCL, écrire `seed_property_tax_series.py`
+- [x] `medianAge` — interpolation des tranches d'âge INSEE `base-ic-evol-struct-pop` → `seed_median_age.py`
+- [x] `avgPropertyTax` — `seed_fiscalite_series.py` (série `property_tax_rate`, 2018-2025) + `seed_avg_property_tax.py` (champ cities)
 - [ ] `highSpeedRailOrAirport` — télécharger dataset gares SNCF + aéroports DGAC, croiser avec coords déjà en base via haversine existant
 - [ ] `rentControl` — construire liste fermée (~25 villes) à la main via ANIL/service-public.fr, coder en dur ou petit CSV
+- [x] **POI OpenStreetMap** → table `pois` — `pipeline/scripts/seed_poi.py` ingère un extrait Geofabrik `.osm.pbf` (nœuds + ways), filtre 8 catégories (education/health/transport/shopping/culture/leisure/services), rattache chaque POI à une commune par point-in-polygon (`poi_source.py` + `poi_geo.py`). Rafraîchissement mensuel. Couvre aussi le volet gares/aéroports de `highSpeedRailOrAirport` (categorie `transport`, types `train_station`/`airport`).
 
 ### Phase 3 — Sources moyennes, nouvelle intégration
 - [ ] Intégrer **INSEE Filosofi** → `median_income` (`seed_income_series.py`)
@@ -198,12 +192,13 @@ en dernier (plus gros chantier, aucune dépendance amont).
 ### Phase 4 — Fragmenté, vérif manuelle
 - [ ] `rentalPermitRequired` — recensement commune par commune (mairie/ANIL), pas d'automatisation possible
 
-### Phase 5 — Scraping (chantier séparé, aucune dépendance amont)
-- [ ] Construire infra scraping (absente du repo actuel) : choix plateformes (SeLoger/LeBonCoin/PAP), respect CGU, rate-limiting
-- [ ] `listings_count_t1..t4` — stock annonces actives par typologie
-- [ ] `search_time_t1..t4` — durée de vie annonce (publication → dépublication)
-- [ ] `sale_time_t1..t4` — délai vente réel par typologie
-- [ ] `rental_tension_score` (version fine) — remplacer le proxy Phase 1 une fois `listings_count`/`search_time`/`sale_time` dispo
+### Phase 5 — Scraping longitudinal (chantier séparé)
+Le projet `scraping-marketplaces` récupère ~28 portails mais est *stateless* (1 run = 1 snapshot, `published_at` quasi nul). Pour les délais il faut : table d'observations d'annonces + re-scrape planifié + matching `source_ref` entre runs pour mesurer la durée de vie.
+- [ ] Couche stockage longitudinal + cron
+- [ ] `search_time_t1..t4` — durée de vie annonce location
+- [ ] `sale_time_t1..t4` / `avgSaleDays` — durée de vie annonce vente
+
+**Retirés du périmètre (2026-09-10)** : `listings_count_t1..t4`, `rental_tension_score`, `supply_demand_ratio`, `properties_for_sale`.
 
 Phases 1-4 = 30/39 courbes, aucun scraping. Phase 5 seule requiert l'infra scraping, pour
 les 9 courbes structurellement bloquées sans elle.

@@ -4,3 +4,5 @@ python-dotenv>=1.0
 tqdm>=4.0
 rich>=13.0
 plotext>=5.0
+osmium>=4.0          # pyosmium — streams .osm.pbf extracts (pipeline/services/poi_source.py)
+shapely>=2.0         # STRtree point-in-polygon for POI → commune (pipeline/services/poi_geo.py)
