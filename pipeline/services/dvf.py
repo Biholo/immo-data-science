@@ -5,16 +5,19 @@ Loads all DVF files, creates cleaned view, runs series queries at each geo level
 
 from __future__ import annotations
 
+import os
 import duckdb
 from pathlib import Path
 from typing import Literal
 
-from .geo import DEPT_TO_REGION, REGION_NAMES
+from .geo import ARR_TO_COMMUNE, DEPT_TO_REGION, REGION_NAMES
 from .series import SERIES
 
 GeoLevel = Literal["city", "department", "region", "country"]
 
-DVF_GLOB = str(Path(__file__).parent.parent.parent / "dvf-raw" / "*.txt")
+# DVF_RAW_DIR overrides the default dvf-raw/ folder (raw DGFiP files are ~2.7 Go, often kept outside the repo)
+DVF_RAW_DIR = Path(os.environ.get("DVF_RAW_DIR") or Path(__file__).parent.parent.parent / "dvf-raw")
+DVF_GLOB = str(DVF_RAW_DIR / "*.txt")
 
 VENTE_NATURES = ("Vente", "Vente en l'état futur d'achèvement")
 
@@ -38,6 +41,12 @@ def build_connection() -> duckdb.DuckDBPyConnection:
         )
     """)
 
+    # Paris / Lyon / Marseille: DVF lists arrondissements (75101..75120, 69381..69389, 13201..13216).
+    # Fold them onto the parent commune (75056 / 69123 / 13055) — the codes that exist in `cities`.
+    # Without this, the three biggest cities got NO DVF series and were filled by IDW ("estimated").
+    con.execute("CREATE OR REPLACE TABLE arr_commune (code VARCHAR, commune VARCHAR)")
+    con.executemany("INSERT INTO arr_commune VALUES (?, ?)", list(ARR_TO_COMMUNE.items()))
+
     # Cleaned view: DuckDB auto-infers Date=DATE, surfaces=BIGINT, type_local=BIGINT
     # Only Valeur fonciere needs manual parsing (French comma decimal)
     con.execute("""
@@ -47,7 +56,7 @@ def build_connection() -> duckdb.DuckDBPyConnection:
             "Nature mutation"                                         AS nature_mutation,
             TRY_CAST(REPLACE("Valeur fonciere", ',', '.') AS DOUBLE) AS valeur_fonciere,
             "Code departement"                                        AS code_dept,
-            "Code departement" || LPAD(CAST("Code commune" AS VARCHAR), 3, '0') AS code_insee,
+            COALESCE(arr.commune, r.raw_insee)                        AS code_insee,
             "Code type local"                                         AS type_local,
             "Surface reelle bati"                                     AS surface_bati,
             "Nombre pieces principales"                               AS nb_pieces,
@@ -61,8 +70,12 @@ def build_connection() -> duckdb.DuckDBPyConnection:
                 CAST("No voie" AS VARCHAR),
                 "Code voie"
             )) AS mutation_id
-        FROM dvf_raw
-        WHERE "Date mutation" IS NOT NULL
+        FROM (
+            SELECT *, "Code departement" || LPAD(CAST("Code commune" AS VARCHAR), 3, '0') AS raw_insee
+            FROM dvf_raw
+            WHERE "Date mutation" IS NOT NULL
+        ) r
+        LEFT JOIN arr_commune arr ON arr.code = r.raw_insee
     """)
 
     # ── Mutation-level price view ────────────────────────────────────────────

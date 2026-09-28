@@ -11,10 +11,26 @@ schema owned by the Prisma project.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ML_ROOT = Path(__file__).parent
-ARTIFACTS_DIR = ML_ROOT / "artifacts"
+
+# ML_VERSION selects the artifacts folder so a retrain never overwrites an earlier one:
+#   unset            -> ml/artifacts/            (v1, livraison — tag git ml-v1-livraison)
+#   ML_VERSION=v2    -> ml/artifacts_v2/
+# Every script reads/writes through ARTIFACTS_DIR, so this is the only switch.
+ML_VERSION = os.environ.get("ML_VERSION", "").strip()
+ARTIFACTS_DIR = ML_ROOT / (f"artifacts_{ML_VERSION}" if ML_VERSION else "artifacts")
+
+# FEATURE_LEVEL is cumulative, so each version isolates one change (ablation for the mémoire):
+#   0  v1 / v2a : v1 features, target = latest-quarter DVF median (7.3k communes with real DVF prices)
+#   1  v2b      : + target = 5-year sales-based price, neighbour-pooled for thin communes (~27k communes)
+#   2  v2c      : + national features (rents, tax, households, retail, lat/lon, sales mix, ...)
+#   3  v2d      : + OSM POI features (counts per category, distance to nearest transport/health/education)
+# Default follows ML_VERSION; ML_FEATURE_LEVEL overrides it.
+_LEVEL_BY_VERSION = {"v2a": 0, "v2b": 1, "v2c": 2, "v2d": 3}
+FEATURE_LEVEL = int(os.environ.get("ML_FEATURE_LEVEL", _LEVEL_BY_VERSION.get(ML_VERSION, 0)))
 
 RANDOM_STATE = 42
 
@@ -89,6 +105,48 @@ PRICE_MODEL_FEATURES = [
     "median_income",              # INSEE Filosofi 2021 — see CLUSTERING_FEATURES comment
     "dist_nearest_major_city_km",  # computed in build_cross_sectional.py, no external file — captures periurban gradient department_code alone can't (e.g. Melun vs Fontainebleau, same dept)
 ]
+
+# ── Level >= 2: national features (built in ml/data/features_v2.py) ─────────
+# No price-derived column here on purpose (median_sale_price, gross_yield, years_to_buy...): they would
+# leak the target. rent_* are ANIL listing rents, an independent signal.
+PRICE_FEATURES_NATIONAL = [
+    "latitude", "longitude", "dist_paris_km",
+    "rent_appt_all", "rent_appt_t12", "rent_appt_t3plus", "rent_maison",
+    "property_tax_rate", "median_age", "tenant_rate", "short_term_rental_score",
+    "demographic_growth_5y", "employment_growth",
+    "student_share", "retired_share",
+    "household_size_1p_rate", "household_size_2p_rate", "household_size_3p_rate",
+    "household_size_4p_rate", "household_size_5p_plus_rate",
+    "company_creations_per_1000", "retail_per_1000",
+    "retail_share_large_format", "retail_share_grocery", "retail_share_specialty",
+    "house_share", "commercial_share", "bloc_share", "mean_surface_unit",
+]
+# ── Level >= 3: OSM POI features (ml/data/features_v2.py) ────────────────────
+PRICE_FEATURES_POI = [
+    "poi_education", "poi_services", "poi_leisure", "poi_health", "poi_shopping",
+    "poi_culture", "poi_transport", "poi_total_per_1000",
+    "dist_nearest_transport_km", "dist_nearest_health_km", "dist_nearest_education_km",
+]
+# Features with structural gaps (Filosofi secret statistique, BPE 63 %, POI outside metropole...): imputed by
+# department median then global median, plus a `<name>_missing` 0/1 flag, instead of dropping the communes.
+PRICE_IMPUTED = [
+    "median_income", "retail_per_1000", "retail_share_large_format", "retail_share_grocery",
+    "retail_share_specialty", "mean_surface_unit", "house_share", "commercial_share", "bloc_share",
+    "dist_nearest_transport_km", "dist_nearest_health_km", "dist_nearest_education_km",
+    "poi_education", "poi_services", "poi_leisure", "poi_health", "poi_shopping", "poi_culture",
+    "poi_transport", "poi_total_per_1000",
+]
+
+if FEATURE_LEVEL >= 2:
+    PRICE_MODEL_FEATURES = PRICE_MODEL_FEATURES + PRICE_FEATURES_NATIONAL
+if FEATURE_LEVEL >= 3:
+    PRICE_MODEL_FEATURES = PRICE_MODEL_FEATURES + PRICE_FEATURES_POI
+
+if FEATURE_LEVEL >= 1:
+    PRICE_MODEL_FEATURES = PRICE_MODEL_FEATURES + [
+        f"{c}_missing" for c in PRICE_IMPUTED if c in PRICE_MODEL_FEATURES
+    ]
+
 PRICE_MODEL_CATEGORICAL = ["housing_zone", "department_code"]
 # housing_zone: backfilled nationally via ml/data/zonage_national.py (was IDF-only before).
 # department_code: real estate price is heavily geography-driven (Paris vs
@@ -96,7 +154,9 @@ PRICE_MODEL_CATEGORICAL = ["housing_zone", "department_code"]
 # one-hot department is a cheap, high-leverage way to let the model learn a
 # geographic price floor before layering socio-demo effects on top.
 
-TARGET_COL = "median_price_per_sqm"
+# Level >= 1: ml/data/price_target.py builds this from the DVF sales (5 years, time-adjusted to the last year,
+# pooled with the nearest communes when a commune has too few sales). Level 0 keeps the v1 target.
+TARGET_COL = "median_price_per_sqm" if FEATURE_LEVEL == 0 else "price_sqm_target"
 
 # ── Model 3 (forecasting) ────────────────────────────────────────────────────
 LAGS = [1, 2, 4]

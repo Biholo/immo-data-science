@@ -2,11 +2,15 @@
 Denormalise "latest timeseries value -> cities snapshot column" for series that
 have no dedicated denorm step of their own.
 
-  cities.owner_rate               <- latest owner_rate            (ratio)
-  cities.vacancy_rate             <- latest vacancy_rate          (ratio)
-  cities.unemployment_rate        <- latest unemployment_rate     (ratio)
+  cities.owner_rate               <- latest owner_rate            (series = ratio 0-1 -> column in PERCENT)
+  cities.vacancy_rate             <- latest vacancy_rate          (series = ratio 0-1 -> column in PERCENT)
+  cities.unemployment_rate        <- latest unemployment_rate     (series = ratio 0-1 -> column in PERCENT)
   cities.median_income            <- latest median_income         (euros/an)
   cities.annual_company_creations <- latest company_creations     (count, rounded int)
+
+Units: the timeseries store ratios (0.1055 = 10.55 %) but every rate column on `cities` is in
+PERCENT (like demographic_growth_5y, gross_yield, avg_property_tax) because the frontend prints
+them as-is with a "%" suffix. Ratio -> percent happens here (rounding mode "pct").
 
 Prereqs: the matching seed_*_series scripts must have run for real first
 (seed_logement_series, seed_rp_series, seed_median_income_series,
@@ -35,9 +39,9 @@ load_dotenv()
 
 # serie_name -> (cities column, pg cast, python rounding)
 SNAPSHOTS: dict[str, tuple[str, str, str]] = {
-    "owner_rate":        ("owner_rate", "double precision", "float4"),
-    "vacancy_rate":      ("vacancy_rate", "double precision", "float4"),
-    "unemployment_rate": ("unemployment_rate", "double precision", "float4"),
+    "owner_rate":        ("owner_rate", "double precision", "pct"),
+    "vacancy_rate":      ("vacancy_rate", "double precision", "pct"),
+    "unemployment_rate": ("unemployment_rate", "double precision", "pct"),
     "median_income":     ("median_income", "double precision", "float2"),
     "company_creations": ("annual_company_creations", "integer", "int"),
 }
@@ -72,6 +76,8 @@ def _round(value: float, mode: str) -> float | int:
         return int(round(value))
     if mode == "float2":
         return round(value, 2)
+    if mode == "pct":          # ratio 0-1 -> percent
+        return round(value * 100, 2)
     return round(value, 4)
 
 

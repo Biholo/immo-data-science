@@ -112,8 +112,6 @@ vérifier qu'une année plus récente n'a pas été publiée depuis.
 | INSEE Sirene (API) | https://api.insee.fr (créer compte + application, doc sur portail-api.insee.fr) | `company_creations` / `annualCompanyCreations` |
 | Carte des loyers (SDES/ANIL) — millésime 2025 | https://www.data.gouv.fr/datasets/carte-des-loyers-indicateurs-de-loyers-dannonce-par-commune-en-2025 | `rent_sqm_t1..t4` — calculé par ANIL depuis annonces leboncoin/SeLoger/PAP |
 | DGFiP — fiscalité locale des particuliers | https://www.data.gouv.fr/datasets/fiscalite-locale-des-particuliers (visu : https://data.economie.gouv.fr/explore/assets/fiscalite-locale-des-particuliers-geo/) | `avgPropertyTax` |
-| SNCF — liste des gares | https://ressources.data.sncf.com/explore/dataset/liste-des-gares/ | `highSpeedRailOrAirport` (volet ferroviaire) |
-| Aéroports français (coordonnées géo) | https://www.data.gouv.fr/datasets/aeroports-francais-coordonnees-geographiques | `highSpeedRailOrAirport` (volet aérien) |
 | Encadrement des loyers (villes concernées) | pas de dataset téléchargeable unique trouvé — ANIL (anil.org) ou service-public.fr, arrêtés préfectoraux par ville | `rentControl` |
 | Permis de louer | pas de dataset téléchargeable unique trouvé — fragmenté par arrêté municipal, à vérifier commune par commune (mairie / ANIL) | `rentalPermitRequired` |
 
@@ -136,7 +134,6 @@ Correspond aux champs `camelCase` évoqués plus tôt (dashboard), distincts des
 | `avgPropertyTax` | Facile (nouvelle source, pattern connu) | data.economie.gouv.fr / collectivites-locales.gouv.fr, cf. §5. |
 | `rentControl` | Facile (source fragmentée) | ANIL (anil.org) ou service-public.fr, liste des ~25 villes sous encadrement, arrêtés préfectoraux. |
 | `medianAge` | Facile (nouvelle source, pattern connu) | Fichier INSEE IC "évolution structure population" déjà téléchargé (cf. §5) — tranches d'âge détaillées présentes, interpolation à coder. |
-| `highSpeedRailOrAirport` | Facile (nouvelle source, pattern connu) | data.sncf.com (gares) + data.gouv.fr (aéroports DGAC), croisement géo via coords déjà en base. |
 | `annualCompanyCreations` | Moyen (API à intégrer) | api.insee.fr — Sirene, cf. §5. |
 | `rentalPermitRequired` | Moyen (fragmenté) | Pas de dataset national — mairie / ANIL, commune par commune. |
 | `attractivenessRank` | Moyen (composite) | Pas de source externe — score à construire une fois les champs ci-dessus en base. |
@@ -175,9 +172,8 @@ en dernier (plus gros chantier, aucune dépendance amont).
 ### Phase 2 — Sources faciles, pattern seed script identique à l'existant
 - [x] `medianAge` — interpolation des tranches d'âge INSEE `base-ic-evol-struct-pop` → `seed_median_age.py`
 - [x] `avgPropertyTax` — `seed_fiscalite_series.py` (série `property_tax_rate`, 2018-2025) + `seed_avg_property_tax.py` (champ cities)
-- [ ] `highSpeedRailOrAirport` — télécharger dataset gares SNCF + aéroports DGAC, croiser avec coords déjà en base via haversine existant
 - [ ] `rentControl` — construire liste fermée (~25 villes) à la main via ANIL/service-public.fr, coder en dur ou petit CSV
-- [x] **POI OpenStreetMap** → table `pois` — `pipeline/scripts/seed_poi.py` ingère un extrait Geofabrik `.osm.pbf` (nœuds + ways), filtre 8 catégories (education/health/transport/shopping/culture/leisure/services), rattache chaque POI à une commune par point-in-polygon (`poi_source.py` + `poi_geo.py`). Rafraîchissement mensuel. Couvre aussi le volet gares/aéroports de `highSpeedRailOrAirport` (categorie `transport`, types `train_station`/`airport`).
+- [x] **POI OpenStreetMap** → table `pois` — `pipeline/scripts/seed_poi.py` ingère un extrait Geofabrik `.osm.pbf` (nœuds + ways), filtre 8 catégories (education/health/transport/shopping/culture/leisure/services), rattache chaque POI à une commune par point-in-polygon (`poi_source.py` + `poi_geo.py`). Rafraîchissement mensuel.
 
 ### Phase 3 — Sources moyennes, nouvelle intégration
 - [ ] Intégrer **INSEE Filosofi** → `median_income` (`seed_income_series.py`)

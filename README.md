@@ -20,6 +20,22 @@ utilisés par la plateforme Rentium.
 - Zonage ABC national, encadrement des loyers, permis de louer
 - Interpolation spatiale IDW pour les communes sans données DVF
 
+
+---
+
+## Démarrage rapide : tout charger
+
+```bash
+pip install -r requirements.txt
+python -m pipeline.scripts.seed_all --list          # étapes + fichiers source présents / manquants
+python -m pipeline.scripts.seed_all                 # tout charger (DVF, ventes géolocalisées, INSEE, POI...)
+python -m pipeline.scripts.audit_coverage           # vérifier que rien ne manque
+```
+
+Un seul département pour tester : `python -m pipeline.scripts.seed_all --dept 77 --poi-region ile-de-france`.
+Reprise après crash : `--from <étape>`. Une seule brique : `--only seed_poi`.
+**Guide complet (options, ordre, durées, POI, rafraîchissement, dépannage) : [`docs/COMMANDES.md`](docs/COMMANDES.md).**
+
 ---
 
 ## Structure
@@ -40,7 +56,11 @@ immo-data-science/
 │       ├── denormalize.py # snapshot fields sur table cities
 │       ├── interpolate.py # interpolation IDW villes sans data
 │       ├── audit.py       # visualisation qualité données (terminal)
-│       ├── seed_cities.py # seed 35 000 communes
+│       ├── seed_cities.py # seed 35 000 communes (+ cities.geo_location + cities.department)
+│       ├── seed_all.py               # ORCHESTRATEUR : toutes les étapes dans l'ordre (--list, --dry-run, --only, --from, --dept, POI inclus)
+│       ├── audit_coverage.py         # couverture de la base : colonnes cities, séries, tables, POI (statuts OK/PARTIEL/VIDE/SANS SRC)
+│       ├── seed_transactions.py      # table transactions : ventes DVF géolocalisées (geo-dvf) → "Ventes comparables"
+│       ├── seed_city_sale_prices.py  # cities.median_sale_price + avg_sale_price (12 derniers mois, depuis transactions)
 │       ├── seed_rp.py     # seed INSEE RP 2022 (étudiants/retraités/chômeurs)
 │       ├── seed_students.py # seed ESR étudiants uniquement (optionnel)
 │       ├── seed_pop_series.py        # série population + aging_index
@@ -71,7 +91,7 @@ immo-data-science/
 │       └── seed_city_latest_snapshots.py # cities.owner_rate / vacancy_rate / median_income / annual_company_creations (← dernière valeur de série)
 ├── ml/                    # modèles IA du mémoire (clustering, prix, forecasting, quantile...) — voir ml/README.md
 ├── scripts/               # wrappers PowerShell — orchestration multi-étapes (seed, ré-entraînement, reporting)
-│   ├── seed_all.ps1            # TOUT seeder en une commande (ordre des dépendances + audit)
+│   ├── seed_all.ps1            # raccourci PowerShell vers `python -m pipeline.scripts.seed_all`
 │   ├── seed_national.ps1        # (legacy) seed partiel : communes + 4 séries socio-démo + DVF
 │   ├── seed_resume.ps1          # reprise seed_national après crash
 │   ├── run_ml.ps1               # les 4 modèles mémoire (ml.scripts.run_all)
@@ -98,7 +118,8 @@ cumulés — et déjà librement téléchargeables). Structure des dossiers cons
 
 | Source | Lien de téléchargement | Emplacement attendu | Consommé par |
 |---|---|---|---|
-| DVF (Demandes de valeurs foncières), DGFiP | [cadastre.data.gouv.fr/dvf](https://cadastre.data.gouv.fr/dvf) | `dvf-raw/ValeursFoncieres-{2021..2025}.txt` | `pipeline/services/dvf.py` |
+| DVF (Demandes de valeurs foncières), DGFiP | [cadastre.data.gouv.fr/dvf](https://cadastre.data.gouv.fr/dvf) | `dvf-raw/ValeursFoncieres-{2021..2025}.txt` (ou tout autre dossier via la variable d'environnement `DVF_RAW_DIR`) | `pipeline/services/dvf.py` |
+| geo-dvf (DVF + coordonnées lat/lon, etalab) — téléchargé automatiquement | [files.data.gouv.fr/geo-dvf](https://files.data.gouv.fr/geo-dvf/latest/csv/) (`{année}/full.csv.gz`, ~100 Mo/an) | `dvf-raw/geo-dvf/full-{année}.csv.gz` (cache, re-téléchargé si la taille distante change ou avec `--refresh`) | `pipeline/scripts/seed_transactions.py` → table `transactions` |
 | INSEE IC — Activité des résidents 2022 | [insee.fr/fr/statistiques/8647006](https://www.insee.fr/fr/statistiques/8647006) | `csv/base-ic-activite-residents-2022.xlsx` + historique 2017-2021 dans `csv/base-ic-activite-residents/*.CSV` | `pipeline/scripts/seed_rp.py`, `seed_rp_series.py`, `seed_employment_series.py` |
 | INSEE IC — Logement 2017-2022 | [insee.fr/fr/statistiques/8647012](https://www.insee.fr/fr/statistiques/8647012) | `csv/base-ic-logement/*.CSV` | `pipeline/scripts/seed_logement_series.py` |
 | INSEE IC — Évolution structure population 2017-2022 | [insee.fr/fr/information/2383389](https://www.insee.fr/fr/information/2383389) | `csv/base-ic-evol-struct-pop/*.CSV` | `pipeline/scripts/seed_pop_series.py` |
@@ -128,6 +149,7 @@ cumulés — et déjà librement téléchargeables). Structure des dossiers cons
 
 | Document | Contenu |
 |---|---|
+| [`docs/COMMANDES.md`](docs/COMMANDES.md) | **Toutes les commandes pour charger / rafraîchir la base** (seed_all, POI, ventes DVF, vérification, dépannage) |
 | [`docs/CONTEXTE_ML_MEMOIRE.md`](docs/CONTEXTE_ML_MEMOIRE.md) | Cahier des charges des 4 modèles ML (clustering, prix, forecasting, quantile) |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Suivi des 39 séries cibles, sources de données, plan d'acquisition |
 | [`docs/ROADMAP_IA.md`](docs/ROADMAP_IA.md) | Architecture retenue pour la couche IA (3 axes de modélisation) |
@@ -223,6 +245,24 @@ Le pipeline `run_dvf` enchaîne automatiquement (si `--geo city`) :
 3. Dénormalisation (`median_price_per_sqm`, `avg_price_per_sqm`, `sparkline_path`, etc.)
 4. Interpolation IDW des villes sans données
 
+### 3b. Ventes DVF → table `transactions` + prix de vente médian/moyen par ville
+
+```bash
+# Toutes les ventes 2021 -> année courante (Maison / Appartement / Local commercial), avec lat/lon
+python -m pipeline.scripts.seed_transactions
+python -m pipeline.scripts.seed_transactions --years 2024,2025 --dept 77   # sous-ensemble
+python -m pipeline.scripts.seed_transactions --dry-run                     # télécharge + nettoie, n'écrit pas
+python -m pipeline.scripts.seed_transactions --refresh                     # force le re-téléchargement
+
+# cities.median_sale_price / avg_sale_price (€, bien entier, 12 derniers mois DVF)
+python -m pipeline.scripts.seed_city_sale_prices [--dept 77] [--min-n 10]
+```
+
+- Une ligne = un local vendu ; `price` = prix TOTAL de la mutation (jamais divisé) ; `lots_in_mutation` = nb de locaux de la mutation (1 = vente unitaire, >1 = vente en bloc).
+- Idempotent : les lignes `source='DVF'` de l'année (et du `--dept`) sont supprimées puis réinsérées dans une seule transaction.
+- Arrondissements Paris/Lyon/Marseille ramenés à la commune (`ARR_TO_COMMUNE`). Communes absentes de `cities` (fusions) : `city_id` NULL.
+- `median_sale_price` / `avg_sale_price` : ventes unitaires Maison + Appartement, fenêtre = 12 mois avant la dernière vente DVF, bornes 500-30 000 €/m², minimum 10 ventes (sinon NULL). Les colonnes €/m² existantes (`median_price_per_sqm`, `avg_price_per_sqm`) viennent des séries `price_sqm_all` (`denormalize.py`).
+
 ### 4. Dénormalisation et interpolation (standalone)
 
 ```bash
@@ -286,18 +326,27 @@ python -m pipeline.scripts.audit --qoq 0.25   # seuil anomalie QoQ à 25%
 
 ## Tout seeder — une commande
 
-```powershell
-.\scripts\seed_all.ps1                 # France entière (l'étape DVF city est la plus longue)
-.\scripts\seed_all.ps1 -Dept 77        # un département (dev/test)
-.\scripts\seed_all.ps1 -RefreshPermit  # relance aussi scrape_rental_permit (réseau) avant seed_rent_regulation
-.\scripts\seed_all.ps1 -SkipDvf        # saute run_dvf (DVF déjà seedé)
+```bash
+python -m pipeline.scripts.seed_all --list                       # étapes + fichiers source présents / manquants
+python -m pipeline.scripts.seed_all                              # France entière : tout (DVF, ventes géolocalisées, INSEE, POI...)
+python -m pipeline.scripts.seed_all --dept 77                    # un département (dev / test)
+python -m pipeline.scripts.seed_all --dry-run                    # affiche les commandes sans rien exécuter
+python -m pipeline.scripts.seed_all --only seed_poi              # une ou plusieurs étapes
+python -m pipeline.scripts.seed_all --from seed_housing_zone     # reprise après un crash
+python -m pipeline.scripts.seed_all --skip-dvf --skip-transactions --skip-poi   # que les données INSEE/DGFiP
+python -m pipeline.scripts.seed_all --refresh-permit             # + scrape_rental_permit (réseau)
+python -m pipeline.scripts.seed_all --poi-region ile-de-france   # POI : extrait régional au lieu de la France (~4 Go)
+python -m pipeline.scripts.audit_coverage                        # contrôle final de couverture de la base
 ```
 
-`seed_all.ps1` enchaîne, dans l'ordre des dépendances : `seed_cities` → `seed_rp` → DVF (department/region/country puis city, avec denormalize + interpolate) → séries INSEE/DGFiP (`seed_pop_series`, `seed_logement_series`, `seed_rp_series`, `seed_employment_series`, `seed_fiscalite_series`, `prep_population_history` + `seed_population_history_series`, `seed_commerce_series`, `seed_household_size_series`, `seed_rent_series`, `seed_median_income_series`, `seed_company_creations_series`) → `seed_housing_zone` → `seed_rent_regulation` → `seed_short_term_rental_score` → `seed_poi` (soft, table `pois`) → `seed_activity_counts_series` → `seed_median_age` → `seed_tenant_profile` → dérivés (`seed_dashboard_fields`, `seed_avg_property_tax`, `seed_gross_yield`, `seed_years_to_buy`, `seed_housing_effort_rate`, `seed_city_latest_snapshots`) → `audit`.
+Équivalent PowerShell : `.\scripts\seed_all.ps1 [-Dept 77] [-SkipDvf] [-SkipTransactions] [-SkipPoi] [-RefreshPermit]` (raccourci vers la commande Python).
 
-Prérequis : `.env` (DATABASE_URL), fichiers déposés dans `csv/` + `dvf-raw/`, migration Prisma appliquée côté `rentium/backend` (enum `SerieName` — `active_population` ajouté le 2026-09-10 — + colonnes `cities`). Si la migration n'est pas passée : `seed_employment_series` sauté en soft-fail, `employment_growth` reste nul.
+`seed_all` enchaîne, dans l'ordre des dépendances : `seed_cities` → `seed_rp` → DVF (department/region/country puis city, avec denormalize + interpolate) → `seed_transactions` + `seed_city_sale_prices` (soft, réseau) → séries INSEE/DGFiP (`seed_pop_series`, `seed_logement_series`, `seed_rp_series`, `seed_employment_series`, `seed_fiscalite_series`, `prep_population_history` + `seed_population_history_series`, `seed_commerce_series`, `seed_household_size_series`, `seed_rent_series`, `seed_median_income_series`, `seed_company_creations_series`) → `seed_housing_zone` → `seed_rent_regulation` → `seed_short_term_rental_score` → `seed_poi` (soft, télécharge le `.osm.pbf` Geofabrik si absent) → `seed_activity_counts_series` → `seed_median_age` → `seed_tenant_profile` → dérivés (`seed_dashboard_fields`, `seed_avg_property_tax`, `seed_gross_yield`, `seed_years_to_buy`, `seed_housing_effort_rate`, `seed_city_latest_snapshots`) → `audit` → `audit_coverage`.
 
-Détail commande par commande : voir section "Commandes" ci-dessus.
+Une étape dont les fichiers source sont absents est sautée (avec la raison), pas en échec. Récapitulatif statut + durée en fin de run.
+
+Prérequis : `.env` (DATABASE_URL), fichiers déposés dans `csv/` + `dvf-raw/` (ou `DVF_RAW_DIR`), migrations Prisma appliquées côté `rentium/backend`.
+**Guide complet (options, tableau des étapes avec durées, POI, rafraîchissement, dépannage) : [`docs/COMMANDES.md`](docs/COMMANDES.md).**
 
 ---
 
@@ -361,6 +410,8 @@ Détail commande par commande : voir section "Commandes" ci-dessus.
 | `median_price_per_sqm` | Dernier trimestre `price_sqm_all` |
 | `avg_price_per_sqm` | Moyenne des 4 derniers trimestres |
 | `transaction_volume` | Somme des 4 derniers trimestres |
+| `median_sale_price` | Prix de vente médian (€, bien entier), 12 derniers mois DVF — `seed_city_sale_prices.py` (depuis `transactions`) |
+| `avg_sale_price` | Prix de vente moyen (€, bien entier), 12 derniers mois DVF — `seed_city_sale_prices.py` |
 | `price_growth_3y` | Évolution sur 3 ans (%) |
 | `price_trend` | `up` / `down` / `stable` (delta dernier QoQ) |
 | `sparkline_path` | JSON des 8 dernières valeurs trimestrielles |
@@ -379,6 +430,8 @@ Détail commande par commande : voir section "Commandes" ci-dessus.
 | `tenant_rate` | `1 - owner_rate` (dernière valeur), `seed_dashboard_fields.py` |
 | `demographic_growth_5y` | `(population[Y] / population[Y-5] - 1) × 100`, `seed_dashboard_fields.py` |
 | `employment_growth` | `(active_population[Y] / active_population[Y-5] - 1) × 100`, `seed_dashboard_fields.py` |
+
+> **Unités** : les séries (`timeseries`) stockent des **ratios** (0,1055 = 10,55 %), mais les colonnes de taux de `cities` (`owner_rate`, `tenant_rate`, `vacancy_rate`, `unemployment_rate`) sont en **pourcentage** (10,55), comme `gross_yield`, `avg_property_tax` ou `demographic_growth_5y` : le frontend les affiche telles quelles avec un « % ». La conversion est faite dans `seed_city_latest_snapshots.py` et `seed_dashboard_fields.py`. `housing_effort_rate` reste un ratio.
 
 > `avg_sale_days`, `search_time_*`, `sale_time_*`, `short_term_rental_score`, `avg_relocation_days`, `tenant_profile`, `company_creations` : **pas encore gérés** — voir section "Chantiers restants".
 > Hors périmètre (retirés du schéma le 2026-09-10) : `listings_count_t*`, `rental_tension_score`, `supply_demand_ratio`, `properties_for_sale`.
@@ -483,6 +536,10 @@ Le tag `name` est **obligatoire** (sans nom = drop). Whitelist tag → (catégor
 
 Prérequis schéma : `pois.osm_id` doit être `BigInt` (les ids de nœuds OSM dépassent int4).
 `rentium/backend/prisma/schema/poi.prisma` : `osmId Int` → `osmId BigInt`, puis migration Prisma.
+
+**État actuel de la base : seul le département 77 est chargé.** Run national + téléchargement automatique du `.pbf` :
+`python -m pipeline.scripts.seed_all --only seed_poi` (mensuel : ajouter `--refresh-poi` ; extrait régional : `--poi-region ile-de-france`).
+Voir [`docs/COMMANDES.md`](docs/COMMANDES.md) §5. Commandes manuelles équivalentes :
 
 ```bash
 # extrait régional (dev/test) — couvre le 77

@@ -253,6 +253,21 @@ def upsert_cities(
             page_size=500,
         )
 
+    # Derived columns not covered by the upsert above:
+    #  - geo_location (PostGIS point) — required by the "cities near a point" radius search
+    #  - department (display name) — copied from the department administrative_zone
+    cur.execute("""
+        UPDATE cities
+        SET geo_location = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
+        WHERE geo_location IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL
+    """)
+    cur.execute("""
+        UPDATE cities c
+        SET department = az.french_name
+        FROM administrative_zones az
+        WHERE az.type = 'department' AND az.code = c.department_code AND c.department IS NULL
+    """)
+
     conn.commit()
     print(f"  {len(to_insert)} inserted, {len(to_update)} updated")
     return len(rows)

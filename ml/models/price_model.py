@@ -28,22 +28,12 @@ from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ml.config import ARTIFACTS_DIR, GB_DEFAULT_PARAMS, PRICE_MODEL_CATEGORICAL, PRICE_MODEL_FEATURES, RANDOM_STATE, TARGET_COL  # noqa: E402
-from ml.data.build_cross_sectional import build_cross_sectional  # noqa: E402
+from ml.config import FEATURE_LEVEL, GB_DEFAULT_PARAMS, ML_VERSION, PRICE_MODEL_CATEGORICAL, PRICE_MODEL_FEATURES, RANDOM_STATE, TARGET_COL  # noqa: E402
+from ml.data.price_frame import load_cluster_assignments, load_price_frame  # noqa: E402,F401  (re-exported: quantile.py imports it from here)
 from ml.evaluation.artifacts import new_run_dir, publish_latest, save_dataframe, save_metadata, save_model, timer  # noqa: E402
 from ml.evaluation.metrics import print_comparison, regression_report  # noqa: E402
 
 N_EXAMPLES = 10
-
-
-def load_cluster_assignments() -> pd.DataFrame | None:
-    path = ARTIFACTS_DIR / "clustering" / "latest" / "cluster_assignments.csv"
-    if not path.exists():
-        print("  No clustering run found (ml/artifacts/clustering/latest/) — skipping cluster_id feature.")
-        return None
-    # insee_code must stay string ("77014", not int 77014) to match build_cross_sectional's
-    # index dtype — otherwise the join below silently matches nothing (all NaN, no error).
-    return pd.read_csv(path, index_col="insee_code", dtype={"insee_code": str})[["cluster_id"]]
 
 
 def build_design_matrix(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
@@ -82,23 +72,15 @@ TUNE_CV = 5
 
 
 def run(dept_filter: str | None = None, dry_run: bool = False, tune: bool = False) -> Path:
-    print("Loading cross-sectional feature table...")
-    df = build_cross_sectional(dept_filter=dept_filter, exclude_estimated=True)
-    print(f"  {len(df)} communes (price_data_source != 'estimated')")
-
-    clusters = load_cluster_assignments()
-    if clusters is not None:
-        df = df.join(clusters, how="left")
-
-    required = PRICE_MODEL_FEATURES + [TARGET_COL, "department_code"]
-    clean = df.dropna(subset=required)
-    print(f"  {len(clean)} communes with complete features + target ({len(df) - len(clean)} dropped)")
+    print(f"Loading price frame (feature level {FEATURE_LEVEL}, target {TARGET_COL})...")
+    frame = load_price_frame(dept_filter)
+    df, clean = frame.df, frame.clean
+    idx_train, idx_val, idx_test = frame.idx_train, frame.idx_val, frame.idx_test
 
     X_full, feature_names = build_design_matrix(clean)
     y_full = clean[TARGET_COL]
 
-    idx_train, idx_temp = train_test_split(clean.index, test_size=0.30, random_state=RANDOM_STATE)
-    idx_val, idx_test = train_test_split(idx_temp, test_size=0.50, random_state=RANDOM_STATE)
+    print(f"  Split: train={len(idx_train)}, val={len(idx_val)}, test={len(idx_test)}")
 
     X_train, y_train = X_full.loc[idx_train], y_full.loc[idx_train]
     X_val, y_val = X_full.loc[idx_val], y_full.loc[idx_val]
@@ -148,6 +130,18 @@ def run(dept_filter: str | None = None, dry_run: bool = False, tune: bool = Fals
     except ImportError:
         print("  shap not installed (pip install shap) — skipping SHAP values.")
 
+    # Comparable-to-v1 view: test communes that also have real quarterly DVF prices (v1's population).
+    dvf_test = idx_test[(clean.loc[idx_test, "price_data_source"] == "dvf").values] if "price_data_source" in clean else idx_test[:0]
+    subset_metrics = None
+    if FEATURE_LEVEL >= 1 and len(dvf_test):
+        subset_metrics = {
+            "n": len(dvf_test),
+            "baseline": regression_report(y_full.loc[dvf_test], baseline_test_pred.loc[dvf_test]),
+            "model": regression_report(y_full.loc[dvf_test], model_test_pred.loc[dvf_test]),
+        }
+        print(f"  Test communes with real quarterly DVF price (n={len(dvf_test)}): "
+              f"MAE={subset_metrics['model']['mae']:.1f} R2={subset_metrics['model']['r2']:.3f}")
+
     # Opportunity score on the full clean population (train+val+test)
     predicted_full = pd.Series(model.predict(X_full), index=clean.index)
 
@@ -164,6 +158,7 @@ def run(dept_filter: str | None = None, dry_run: bool = False, tune: bool = Fals
         "opportunity_score": (y_full - predicted_full) / predicted_full,
         "cluster_id": clean.get("cluster_id"),
         "split": split,
+        **{c: clean[c] for c in ("price_reliability", "n_own", "n_pooled", "pool_radius_km") if c in clean},
     })
 
     examples = pd.concat([
@@ -191,13 +186,17 @@ def run(dept_filter: str | None = None, dry_run: bool = False, tune: bool = Fals
         "target": TARGET_COL,
         "features_raw": PRICE_MODEL_FEATURES,
         "features_encoded": feature_names,
-        "cluster_feature_used": clusters is not None,
+        "ml_version": ML_VERSION or "v1",
+        "feature_level": FEATURE_LEVEL,
+        "cluster_feature_used": frame.clusters_used,
         "n_communes_loaded": len(df),
         "n_communes_used": len(clean),
         "split_sizes": {"train": len(idx_train), "val": len(idx_val), "test": len(idx_test)},
         "baseline": "department median price/m² (train-only)",
         "baseline_metrics_test": baseline_metrics,
         "model_metrics_test": model_metrics,
+        "metrics_test_on_real_dvf_communes": subset_metrics,
+        **frame.meta,
         "dept_filter": dept_filter,
         **t,
     })

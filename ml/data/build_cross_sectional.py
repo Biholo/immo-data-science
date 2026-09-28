@@ -39,6 +39,17 @@ EARTH_RADIUS_KM = 6371.0
 N_MAJOR_CITIES = 50  # top-N communes by population, used as the "major city" reference set
 
 
+# `cities.insee_code` is not unique: 69001 = Lyon + Affoux, 69100 = Villeurbanne + Irigny (postal-code
+# style codes leaking in). Every join on insee_code would duplicate rows, so the less populous city of
+# each colliding code is ignored (Lyon / Villeurbanne win). ids of the ignored cities:
+SHADOWED_CITIES_SQL = """
+    SELECT id FROM (
+        SELECT id, ROW_NUMBER() OVER (PARTITION BY insee_code ORDER BY population DESC NULLS LAST, id) AS rn
+        FROM cities
+    ) ranked WHERE rn > 1
+"""
+
+
 def _fetch_major_cities(conn, n_major: int = N_MAJOR_CITIES) -> pd.DataFrame:
     """
     Top-N communes by population, queried WITHOUT any dept_filter — this is
@@ -84,13 +95,14 @@ def _add_distance_to_major_city(df: pd.DataFrame, major: pd.DataFrame) -> pd.Dat
     return df
 
 
-def _fetch_latest_socio_series(conn, dept_filter: str | None = None) -> pd.DataFrame:
+def _fetch_latest_socio_series(conn, dept_filter: str | None = None, names: list[str] | None = None) -> pd.DataFrame:
     """Latest value per (commune, serie_name) for the annual INSEE series.
 
     Returns a wide DataFrame indexed by insee_code, one column per serie name.
     """
     dept_clause = "AND c.department_code = %s" if dept_filter else ""
-    params: list = [SOCIO_SERIES]
+    names = names or SOCIO_SERIES
+    params: list = [names]
     if dept_filter:
         params.append(dept_filter)
 
@@ -103,6 +115,7 @@ def _fetch_latest_socio_series(conn, dept_filter: str | None = None) -> pd.DataF
         WHERE s.name::text = ANY(%s)
           AND s.city_id IS NOT NULL
           AND s.frequency::text = 'ANNUAL'
+          AND c.id NOT IN ({SHADOWED_CITIES_SQL})
           {dept_clause}
         ORDER BY s.city_id, s.name, t.timestamp DESC
     """
@@ -112,7 +125,7 @@ def _fetch_latest_socio_series(conn, dept_filter: str | None = None) -> pd.DataF
 
     long_df = pd.DataFrame(rows, columns=["insee_code", "name", "value", "timestamp"])
     if long_df.empty:
-        return pd.DataFrame(columns=["insee_code", *SOCIO_SERIES]).set_index("insee_code")
+        return pd.DataFrame(columns=["insee_code", *names]).set_index("insee_code")
 
     wide = long_df.pivot(index="insee_code", columns="name", values="value")
     wide.columns.name = None
@@ -120,7 +133,7 @@ def _fetch_latest_socio_series(conn, dept_filter: str | None = None) -> pd.DataF
 
 
 def _fetch_cities_snapshot(conn, dept_filter: str | None = None) -> pd.DataFrame:
-    dept_clause = "WHERE department_code = %s" if dept_filter else ""
+    dept_clause = "AND department_code = %s" if dept_filter else ""
     params = [dept_filter] if dept_filter else []
 
     sql = f"""
@@ -130,6 +143,7 @@ def _fetch_cities_snapshot(conn, dept_filter: str | None = None) -> pd.DataFrame
             median_price_per_sqm, avg_price_per_sqm, transaction_volume,
             price_growth_3y, price_trend, price_data_source
         FROM cities
+        WHERE id NOT IN ({SHADOWED_CITIES_SQL})
         {dept_clause}
     """
     with conn.cursor() as cur:

@@ -115,16 +115,19 @@ def upsert_series_and_timeseries(
             ctry_id   = geo_kwargs.get("country_id")
 
             if not dry_run:
-                # SELECT-then-INSERT/UPDATE — avoids ON CONFLICT constraint dependency
+                # SELECT-then-INSERT/UPDATE — avoids ON CONFLICT constraint dependency.
+                # A serie targets exactly ONE geo entity, so filter with a plain equality on that
+                # column: `IS NOT DISTINCT FROM` on 3 columns cannot use the series indexes and
+                # degrades to a full scan per geo (O(N²) once `series` holds ~750k rows).
+                if city_id:
+                    geo_cond, geo_id_param = "city_id = %s", city_id
+                elif az_id:
+                    geo_cond, geo_id_param = "administrative_zone_id = %s", az_id
+                else:
+                    geo_cond, geo_id_param = "country_id = %s", ctry_id
                 cur.execute(
-                    """
-                    SELECT id FROM series
-                    WHERE name = %s
-                    AND city_id IS NOT DISTINCT FROM %s
-                    AND administrative_zone_id IS NOT DISTINCT FROM %s
-                    AND country_id IS NOT DISTINCT FROM %s
-                    """,
-                    (serie_def["name"], city_id, az_id, ctry_id),
+                    f"SELECT id FROM series WHERE name = %s AND {geo_cond}",
+                    (serie_def["name"], geo_id_param),
                 )
                 row = cur.fetchone()
                 if row:

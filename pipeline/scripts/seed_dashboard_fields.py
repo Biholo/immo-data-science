@@ -1,7 +1,7 @@
 """
 Fills cities snapshot fields derived from already-seeded timeseries/columns:
 
-  tenant_rate           = 1 - latest owner_rate            (needs seed_logement_series.py run)
+  tenant_rate           = (1 - latest owner_rate) × 100    (PERCENT; needs seed_logement_series.py run)
   demographic_growth_5y = (population[Y] / population[Y-5] - 1) × 100
                                                              (needs seed_pop_series.py run)
   employment_growth     = (active_population[Y] / active_population[Y-5] - 1) × 100
@@ -60,13 +60,13 @@ def _fetch_city_timeseries(cur, serie_name: str, dept: str | None) -> dict[str, 
 
 
 def compute_tenant_rate(owner_rate_series: dict[str, list]) -> dict[str, float]:
-    """tenant_rate = 1 - latest owner_rate, per city."""
+    """tenant_rate = (1 - latest owner_rate) x 100 (percent, like the other cities rate columns), per city."""
     out: dict[str, float] = {}
     for city_id, pts in owner_rate_series.items():
         if not pts:
             continue
         latest_owner_rate = pts[-1][1]
-        out[city_id] = round(1 - latest_owner_rate, 4)
+        out[city_id] = round((1 - latest_owner_rate) * 100, 2)
     return out
 
 

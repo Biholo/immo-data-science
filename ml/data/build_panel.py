@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from pipeline.services.db import get_connection  # noqa: E402
 
 from ml.config import LAGS, PRICE_SERIE, VOLUME_SERIE  # noqa: E402
-from ml.data.build_cross_sectional import build_cross_sectional  # noqa: E402
+from ml.data.build_cross_sectional import SHADOWED_CITIES_SQL, build_cross_sectional  # noqa: E402
 
 
 def _fetch_quarterly_serie(conn, serie_name: str, dept_filter: str | None = None) -> pd.DataFrame:
@@ -38,13 +38,14 @@ def _fetch_quarterly_serie(conn, serie_name: str, dept_filter: str | None = None
         params.append(dept_filter)
 
     sql = f"""
-        SELECT c.insee_code, t.timestamp::date AS period, t.value
+        SELECT c.insee_code, t.timestamp::date AS period, t.value, t.created_at
         FROM series s
         JOIN timeseries t ON t.serie_id = s.id
         JOIN cities c ON s.city_id = c.id
         WHERE s.name::text = %s
           AND s.city_id IS NOT NULL
           AND s.frequency::text = 'QUARTERLY'
+          AND c.id NOT IN ({SHADOWED_CITIES_SQL})
           {dept_clause}
         ORDER BY c.insee_code, t.timestamp
     """
@@ -52,9 +53,13 @@ def _fetch_quarterly_serie(conn, serie_name: str, dept_filter: str | None = None
         cur.execute(sql, params)
         rows = cur.fetchall()
 
-    df = pd.DataFrame(rows, columns=["insee_code", "period", serie_name])
+    df = pd.DataFrame(rows, columns=["insee_code", "period", serie_name, "created_at"])
     df["period"] = pd.to_datetime(df["period"])  # psycopg2 returns datetime.date (object dtype)
-    return df
+    # `timeseries` has no UNIQUE(serie_id, timestamp): the DVF quarterly series were loaded twice
+    # (2026-08-13 and 08-14), ~870k duplicated rows. Read-only fix here (ml/ never writes the DB):
+    # keep the most recently written value per (commune, quarter).
+    df = df.sort_values("created_at").drop_duplicates(["insee_code", "period"], keep="last")
+    return df.drop(columns="created_at")
 
 
 def build_panel(

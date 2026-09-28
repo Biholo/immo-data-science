@@ -42,11 +42,11 @@ from sklearn.model_selection import train_test_split
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from ml.config import GB_DEFAULT_PARAMS, PRICE_MODEL_FEATURES, RANDOM_STATE, TARGET_COL  # noqa: E402
-from ml.data.build_cross_sectional import build_cross_sectional  # noqa: E402
+from ml.config import FEATURE_LEVEL, GB_DEFAULT_PARAMS, ML_VERSION, PRICE_MODEL_FEATURES, TARGET_COL  # noqa: E402
+from ml.data.price_frame import load_price_frame  # noqa: E402
 from ml.evaluation.artifacts import new_run_dir, publish_latest, save_dataframe, save_metadata, save_model, timer  # noqa: E402
 from ml.evaluation.metrics import pinball_loss  # noqa: E402
-from ml.models.price_model import build_design_matrix, load_cluster_assignments  # noqa: E402
+from ml.models.price_model import build_design_matrix  # noqa: E402
 
 QUANTILES = [0.1, 0.5, 0.9]
 CONFORMAL_ALPHA = 0.2  # target interval = 1 - alpha = 80%, matching the Q10/Q90 nominal coverage
@@ -74,22 +74,13 @@ def conformal_margin(q10: pd.Series, q90: pd.Series, y_true: pd.Series, alpha: f
 
 
 def run(dept_filter: str | None = None, dry_run: bool = False) -> Path:
-    print("Loading cross-sectional feature table...")
-    df = build_cross_sectional(dept_filter=dept_filter, exclude_estimated=True)
-
-    clusters = load_cluster_assignments()
-    if clusters is not None:
-        df = df.join(clusters, how="left")
-
-    required = PRICE_MODEL_FEATURES + [TARGET_COL, "department_code"]
-    clean = df.dropna(subset=required)
-    print(f"  {len(clean)} communes with complete features + target")
+    print(f"Loading price frame (feature level {FEATURE_LEVEL}, target {TARGET_COL})...")
+    frame = load_price_frame(dept_filter)
+    clean = frame.clean
+    idx_train, idx_val, idx_test = frame.idx_train, frame.idx_val, frame.idx_test
 
     X_full, feature_names = build_design_matrix(clean)
     y_full = clean[TARGET_COL]
-
-    idx_train, idx_temp = train_test_split(clean.index, test_size=0.30, random_state=RANDOM_STATE)
-    idx_val, idx_test = train_test_split(idx_temp, test_size=0.50, random_state=RANDOM_STATE)
     print(f"  Split: train={len(idx_train)}, val={len(idx_val)}, test={len(idx_test)}")
 
     X_train, y_train = X_full.loc[idx_train], y_full.loc[idx_train]
@@ -160,6 +151,8 @@ def run(dept_filter: str | None = None, dry_run: bool = False) -> Path:
         "quantiles": QUANTILES,
         "hyperparameters": {k: v for k, v in GB_DEFAULT_PARAMS.items()},
         "target": TARGET_COL,
+        "ml_version": ML_VERSION or "v1",
+        "feature_level": FEATURE_LEVEL,
         "features_raw": PRICE_MODEL_FEATURES,
         "features_encoded": feature_names,
         "split_sizes": {"train": len(idx_train), "val": len(idx_val), "test": len(idx_test)},

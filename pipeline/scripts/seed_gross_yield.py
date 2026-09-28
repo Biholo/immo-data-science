@@ -218,7 +218,7 @@ def seed_gross_yield_timeseries(conn, cur, gross_yield_by_typology: dict[str, di
             continue
 
         serie_def = {
-            "name": serie_name, "source": "COMPUTED", "frequency": "ANNUAL",
+            "name": serie_name, "source": "CALC", "frequency": "ANNUAL",
             "unit": "%", "chart_type": "LINE",
         }
         if rows:
