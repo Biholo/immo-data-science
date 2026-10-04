@@ -20,8 +20,11 @@ Steps run through `seed_all --only ...` (so the usual order, "soft" steps and so
 with DATABASE_URL pointing at the target. Every step is idempotent (upsert, or delete + re-insert), so
 re-running a step that was only partly loaded completes it without duplicating rows.
 
-Steps that need raw files absent from this repo (run_dvf_* needs the ValeursFoncieres-*.txt files) cannot
-be re-run: they are reported as "non relançable" with the reason, and have to be loaded another way.
+run_dvf_national / run_dvf_city need the raw ValeursFoncieres-*.txt files in dvf-raw/ (see seed_all --list);
+without them seed_all skips the step and says why.
+
+A step that rewrites columns shared with later steps drags those steps along (FOLLOW_UPS): for example
+re-running seed_rp also re-runs seed_activity_counts_series, which overwrites its retired_count.
 """
 
 from __future__ import annotations
@@ -58,6 +61,8 @@ class Probe:
 PROBES: dict[str, list[Probe]] = {
     "seed_cities": [Probe("communes", "SELECT COUNT(*) FROM cities"), Probe("zones administratives", "SELECT COUNT(*) FROM administrative_zones")],
     "seed_rp": [Probe("cities.student_count", column("student_count"))],
+    "run_dvf_national": [Probe("séries départements (price_sqm_all)", serie("price_sqm_all", "administrative_zone_id")), Probe("séries pays (price_sqm_all)", serie("price_sqm_all", "country_id"))],
+    "run_dvf_city": [Probe("série price_sqm_all", serie("price_sqm_all")), Probe("série price_sqm_house", serie("price_sqm_house")), Probe("série transaction_volume", serie("transaction_volume")), Probe("série vefa_share", serie("vefa_share")), Probe("cities.median_price_per_sqm", column("median_price_per_sqm"))],
     "seed_transactions": [Probe("transactions", "SELECT COUNT(*) FROM transactions")],
     "seed_price_range_series": [Probe("série price_sqm_low", serie("price_sqm_low")), Probe("série sale_price_median", serie("sale_price_median"))],
     "seed_transaction_volume_typology": [Probe("série transaction_volume_t2", serie("transaction_volume_t2"))],
@@ -91,12 +96,18 @@ PROBES: dict[str, list[Probe]] = {
     "seed_city_latest_snapshots": [Probe("cities.owner_rate", column("owner_rate")), Probe("cities.median_income", column("median_income"))],
 }
 
-# steps that cannot be re-run from this repo, with the probes that show they are incomplete
-NOT_RERUNNABLE: dict[str, tuple[str, list[Probe]]] = {
-    "run_dvf (séries DVF)": (
-        "demande les fichiers bruts ValeursFoncieres-*.txt (absents de dvf-raw/) : à charger autrement, p. ex. copie des tables series/timeseries depuis la base de référence",
-        [Probe("série price_sqm_all", serie("price_sqm_all")), Probe("série price_sqm_house", serie("price_sqm_house")), Probe("série transaction_volume", serie("transaction_volume")), Probe("série vefa_share", serie("vefa_share")), Probe("cities.median_price_per_sqm", column("median_price_per_sqm"))],
-    ),
+# A step that rewrites columns shared with later steps must be followed by them, otherwise the re-run
+# would leave those columns with the earlier step's weaker values (seed_all order = the order of the list).
+FOLLOW_UPS: dict[str, list[str]] = {
+    # seed_rp writes retired_count / unemployed_count (15-64 only); seed_activity_counts_series overwrites them with the better proxy
+    "seed_rp": ["seed_activity_counts_series", "seed_tenant_profile"],
+    # seed_city_sale_prices resets the sale price range of its scope: the IDW estimates are lost and must be rebuilt
+    "seed_city_sale_prices": ["interpolate_price_range"],
+    # the DVF series feed the estimates, the yields and the affordability ratios
+    "run_dvf_national": [],
+    "run_dvf_city": ["seed_gross_yield", "seed_years_to_buy", "seed_housing_effort_rate", "interpolate_price_range"],
+    "seed_transactions": ["seed_city_sale_prices", "seed_price_range_series", "seed_transaction_volume_typology", "interpolate_price_range"],
+    "seed_population_history_series": ["seed_dashboard_fields"],
 }
 
 
@@ -170,14 +181,14 @@ def main() -> int:
         print(f"\nPOI : {len(gaps)} département(s) incomplet(s) sur la cible (code, cible, référence) :")
         print("  " + ", ".join(f"{d} ({t:,}/{r:,})".replace(",", " ") for d, t, r in gaps[:40]) + (" ..." if len(gaps) > 40 else ""))
 
-    print()
-    for name, (why, probes) in NOT_RERUNNABLE.items():
-        gaps_here = [p.label for p in probes if scalar(ref, p.sql) > 0 and scalar(target, p.sql) < args.ratio * scalar(ref, p.sql)]
-        if gaps_here:
-            print(f"NON RELANÇABLE : {name} incomplet ({', '.join(gaps_here)}) : {why}")
-
     ref_conn.close()
     target_conn.close()
+
+    followers = [f for step in missing for f in FOLLOW_UPS.get(step, []) if f not in missing]
+    if followers:
+        print(f"\nÉtapes ajoutées car elles réécrivent des colonnes partagées : {', '.join(dict.fromkeys(followers))}")
+        order = list(PROBES)
+        missing = sorted(set(missing) | set(followers), key=order.index)
 
     print(f"\n{len(missing)} étape(s) à relancer : {', '.join(missing) if missing else 'aucune'}")
     if not missing or not args.run:

@@ -112,7 +112,7 @@ def main() -> None:
         # Cities of the scope that no longer qualify go back to NULL (idempotent re-run).
         scope_sql = "WHERE department_code = %s" if args.dept else ""
         cur.execute(
-            f"UPDATE cities SET median_sale_price = NULL, avg_sale_price = NULL, sale_price_low = NULL, sale_price_high = NULL, price_per_sqm_low = NULL, price_per_sqm_high = NULL {scope_sql}",
+            f"UPDATE cities SET median_sale_price = NULL, avg_sale_price = NULL, sale_price_low = NULL, sale_price_high = NULL, price_per_sqm_low = NULL, price_per_sqm_high = NULL, price_range_estimated = false {scope_sql}",
             [args.dept] if args.dept else [],
         )
         psycopg2.extras.execute_values(

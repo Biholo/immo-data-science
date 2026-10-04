@@ -17,8 +17,9 @@ Two things are filled:
 
   2. quarterly series price_sqm_house / price_sqm_appt / price_sqm_all of the communes that have none:
        for each quarter, IDW of the neighbours that have a value that quarter (>= 2 of them required).
-     They are stored with source = 'CALC' so they can be told apart from DVF series, and they are
-     rebuilt from scratch on each run (idempotent).
+     They are stored with source = 'CALC' so they can be told apart from DVF series. Create-or-update:
+     an existing estimated series is reused and its points are updated, never duplicated. The estimated
+     series of a commune that has meanwhile got a real series of its own is removed.
 
 Run after seed_city_sale_prices and the DVF series:
   python -m pipeline.scripts.interpolate_price_range [--dept 77] [--k 5] [--max-dist 30] [--dry-run]
@@ -157,25 +158,20 @@ def interpolate_series(cur, conn, dept, k, max_dist, dry_run) -> None:
         in_scope = {r[0] for r in cur.fetchall()}
 
     for name in SERIES_TO_FILL:
-        if not dry_run:
-            # rebuild the estimated series of this name from scratch
-            scope = "AND city_id IN (SELECT id FROM cities WHERE department_code = %s)" if dept else "AND city_id IS NOT NULL"
-            extra = [dept] if dept else []
-            cur.execute(f"DELETE FROM timeseries WHERE serie_id IN (SELECT id FROM series WHERE name::text = %s AND source::text = 'CALC' {scope})", [name, *extra])
-            cur.execute(f"DELETE FROM series WHERE name::text = %s AND source::text = 'CALC' {scope}", [name, *extra])
-            conn.commit()
-
         cur.execute(
             """
             SELECT s.city_id, t.timestamp::date, t.value
             FROM series s JOIN timeseries t ON t.serie_id = s.id
-            WHERE s.name::text = %s AND s.city_id IS NOT NULL AND t.dimension IS NULL
+            WHERE s.name::text = %s AND s.source::text <> 'CALC' AND s.city_id IS NOT NULL AND t.dimension IS NULL
             """,
             (name,),
         )
         real: dict[str, dict] = defaultdict(dict)
         for city_id, ts, value in cur.fetchall():
             real[city_id][ts] = value
+
+        cur.execute("SELECT city_id, id FROM series WHERE name::text = %s AND source::text = 'CALC' AND city_id IS NOT NULL", (name,))
+        calc_series: dict[str, str] = dict(cur.fetchall())
 
         known_ids = [c for c in real if c in coords]
         target_ids = [c for c in coords if c not in real and (in_scope is None or c in in_scope)]
@@ -199,34 +195,75 @@ def interpolate_series(cur, conn, dept, k, max_dist, dry_run) -> None:
                 points.append((ts, idw(np.array([p[0] for p in pairs]), np.array([p[1] for p in pairs]))))
             if not points:
                 continue
-            serie_id = str(uuid.uuid4())
-            serie_rows.append((serie_id, name, city_id))
-            out_rows.extend((str(uuid.uuid4()), ts, round(value, 1), serie_id) for ts, value in sorted(points))
+            serie_id = calc_series.get(city_id)
+            if serie_id is None:
+                serie_id = str(uuid.uuid4())
+                serie_rows.append((serie_id, name, city_id))
+            out_rows.extend((serie_id, ts, round(value, 1)) for ts, value in sorted(points))
 
-        print(f"  {name}: {len(known_ids)} real series, {len(serie_rows)} estimated ({len(out_rows)} points, {len(target_ids) - len(serie_rows)} communes without enough neighbours)")
-        if dry_run or not serie_rows:
+        estimated_cities = len({r[0] for r in out_rows})
+        print(f"  {name}: {len(known_ids)} real series, {estimated_cities} estimated ({len(serie_rows)} new, {len(out_rows)} points, {len(target_ids) - estimated_cities} communes without enough neighbours)")
+        if dry_run:
             continue
-        psycopg2.extras.execute_values(
-            cur,
+
+        # estimated series of communes that now have a real series are stale: drop them
+        stale = [calc_series[c] for c in real if c in calc_series]
+        if stale:
+            cur.execute("DELETE FROM timeseries WHERE serie_id = ANY(%s)", (stale,))
+            cur.execute("DELETE FROM series WHERE id = ANY(%s)", (stale,))
+        if not out_rows:
+            conn.commit()
+            continue
+
+        if serie_rows:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO series (id, name, source, frequency, unit, chart_type, city_id, created_at, updated_at)
+                VALUES %s
+                """,
+                serie_rows,
+                template="(%s, %s::\"SerieName\", 'CALC', 'QUARTERLY', '€/m²', 'LINE', %s, NOW(), NOW())",
+                page_size=2000,
+            )
+
+        # points: update the ones that exist, insert the others
+        cur.execute(
             """
-            INSERT INTO series (id, name, source, frequency, unit, chart_type, city_id, created_at, updated_at)
-            VALUES %s
+            SELECT t.serie_id, t.timestamp::date, t.id
+            FROM timeseries t JOIN series s ON s.id = t.serie_id
+            WHERE s.name::text = %s AND s.source::text = 'CALC' AND s.city_id IS NOT NULL AND t.dimension IS NULL
             """,
-            serie_rows,
-            template="(%s, %s::\"SerieName\", 'CALC', 'QUARTERLY', '€/m²', 'LINE', %s, NOW(), NOW())",
-            page_size=2000,
+            (name,),
         )
-        psycopg2.extras.execute_values(
-            cur,
-            """
-            INSERT INTO timeseries (id, timestamp, value, dimension, serie_id, created_at, updated_at)
-            VALUES %s
-            """,
-            out_rows,
-            template="(%s, %s, %s, NULL, %s, NOW(), NOW())",
-            page_size=5000,
-        )
+        existing_points = {(r[0], r[1]): r[2] for r in cur.fetchall()}
+        to_insert = [(str(uuid.uuid4()), ts, value, serie_id) for serie_id, ts, value in out_rows if (serie_id, ts) not in existing_points]
+        to_update = [(value, existing_points[(serie_id, ts)]) for serie_id, ts, value in out_rows if (serie_id, ts) in existing_points]
+        if to_insert:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO timeseries (id, timestamp, value, dimension, serie_id, created_at, updated_at)
+                VALUES %s
+                """,
+                to_insert,
+                template="(%s, %s, %s, NULL, %s, NOW(), NOW())",
+                page_size=5000,
+            )
+        if to_update:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                UPDATE timeseries SET value = data.v, updated_at = NOW()
+                FROM (VALUES %s) AS data(v, id)
+                WHERE timeseries.id = data.id
+                """,
+                to_update,
+                template="(%s::double precision, %s)",
+                page_size=5000,
+            )
         conn.commit()
+        print(f"    {len(to_insert)} points created, {len(to_update)} updated")
 
 
 def main() -> None:

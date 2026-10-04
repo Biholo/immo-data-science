@@ -30,7 +30,8 @@ needed here).
   min sales: a (commune, window) with fewer than --min-n qualifying sales is skipped -- a
              10th / 90th percentile over a handful of sales is noise (series.py uses 10 too)
 
-Idempotent: the selected series (all by default, or --only) are deleted and rebuilt on each run.
+Create-or-update: an existing serie is reused and its points are updated, never duplicated (re-runnable).
+A commune that stops qualifying keeps its previous points.
 
 Run:
   python -m pipeline.scripts.seed_price_range_series [--dept 77] [--min-n 10] [--dry-run]
@@ -147,16 +148,6 @@ def main() -> None:
 
         cities = {r[0] for r in rows}
         print(f"  {len(cities)} communes")
-
-        if not args.dry_run:
-            # rebuild from scratch: points of the previous (per-quarter) definition must not linger
-            with conn.cursor() as cur:
-                names = list(series_defs)
-                scope = "AND city_id IN (SELECT id FROM cities WHERE department_code = %s)" if args.dept else "AND city_id IS NOT NULL"
-                extra = [args.dept] if args.dept else []
-                cur.execute(f"DELETE FROM timeseries WHERE serie_id IN (SELECT id FROM series WHERE name::text = ANY(%s) {scope})", [names, *extra])
-                cur.execute(f"DELETE FROM series WHERE name::text = ANY(%s) {scope}", [names, *extra])
-            conn.commit()
 
         for name, (col_idx, unit) in series_defs.items():
             series_rows = [(r[0], r[1].isoformat(), round(float(r[col_idx]), 1)) for r in rows]

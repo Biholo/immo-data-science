@@ -17,7 +17,7 @@ cannot be used because it does not keep the number of rooms.
   geography: Paris / Lyon / Marseille arrondissements folded onto the parent commune
   no minimum: a count is meaningful even with 1 sale (min_n = 1 in series.py)
 
-Idempotent: the four series are deleted and rebuilt on each run.
+Create-or-update: an existing serie is reused and its points are updated, never duplicated (re-runnable).
 
 Run (after seed_transactions.py):
   python -m pipeline.scripts.seed_transaction_volume_typology [--dept 77] [--dry-run]
@@ -109,14 +109,6 @@ def main() -> None:
 
     conn = psycopg2.connect(dsn)
     try:
-        if not args.dry_run:
-            with conn.cursor() as cur:
-                scope = "AND city_id IN (SELECT id FROM cities WHERE department_code = %s)" if args.dept else "AND city_id IS NOT NULL"
-                extra = [args.dept] if args.dept else []
-                cur.execute(f"DELETE FROM timeseries WHERE serie_id IN (SELECT id FROM series WHERE name::text = ANY(%s) {scope})", [SERIES_NAMES, *extra])
-                cur.execute(f"DELETE FROM series WHERE name::text = ANY(%s) {scope}", [SERIES_NAMES, *extra])
-            conn.commit()
-
         for n in (1, 2, 3, 4):
             name = f"transaction_volume_t{n}"
             rows = [(insee, quarter, float(count)) for insee, quarter, typology, count in counts if typology == n]

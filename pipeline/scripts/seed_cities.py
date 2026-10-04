@@ -205,7 +205,9 @@ def upsert_cities(
 
     # Split into INSERT (new) vs UPDATE (existing) — avoids ON CONFLICT constraint dependency
     insee_codes = [r[13] for r in rows]
-    cur.execute("SELECT insee_code, id FROM cities WHERE insee_code = ANY(%s)", (insee_codes,))
+    # two rows can share an insee_code (demo fixtures reuse postal codes): the OLDEST row is the real commune,
+    # it is listed last so that it wins in the dict
+    cur.execute("SELECT insee_code, id FROM cities WHERE insee_code = ANY(%s) ORDER BY created_at DESC", (insee_codes,))
     existing = {r[0]: r[1] for r in cur.fetchall()}
 
     to_insert = [r for r in rows if r[13] not in existing]
@@ -244,11 +246,11 @@ def upsert_cities(
                 updated_at      = NOW()
             FROM (VALUES %s) AS data(
                 name, french_name, population, postal, lat, lon,
-                dept_code, zone_id, insee_code
+                dept_code, zone_id, id
             )
-            WHERE cities.insee_code = data.insee_code
+            WHERE cities.id = data.id
             """,
-            [(r[1], r[3], r[6], r[7], r[8], r[9], r[12], r[11], r[13]) for r in to_update],
+            [(r[1], r[3], r[6], r[7], r[8], r[9], r[12], r[11], existing[r[13]]) for r in to_update],
             template="(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             page_size=500,
         )
