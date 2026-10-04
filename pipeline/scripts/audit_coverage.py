@@ -36,7 +36,7 @@ IGNORED_CITY_COLUMNS = {
 
 # 0 % expected: no source in immo-data-science (README > "Chantiers restants")
 NO_SOURCE = {
-    "image", "eligible_zones", "major_urban_projects", "attractiveness_rank",
+    "image",
     "avg_sale_days", "avg_relocation_days", "rental_tension",
 }
 NO_SOURCE_SERIES_PREFIX = ("search_time_", "sale_time_")

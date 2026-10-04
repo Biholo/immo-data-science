@@ -205,6 +205,21 @@ SERIES: list[dict] = [
         "select": "COUNT(DISTINCT mutation_id)",
         "min_n": 1,
     },
+    # Volume per typology: appartements only, nb_pieces buckets match price_sqm_t1..t4
+    *[
+        {
+            "name": f"transaction_volume_t{n}",
+            "source": "DVF",
+            "unit": "transactions",
+            "frequency": "QUARTERLY",
+            "chart_type": "BAR",
+            "nature_clause": VENTE_NATURE,
+            "where": f"type_local = 2 AND {pieces}",
+            "select": "COUNT(DISTINCT mutation_id)",
+            "min_n": 1,
+        }
+        for n, pieces in ((1, "nb_pieces IN (0, 1)"), (2, "nb_pieces = 2"), (3, "nb_pieces = 3"), (4, "nb_pieces >= 4"))
+    ],
     {
         "name": "vefa_share",
         "source": "DVF",

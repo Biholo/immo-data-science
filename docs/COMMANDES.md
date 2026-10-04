@@ -218,7 +218,7 @@ chaque colonne `cities`, nombre de séries par `SerieName` (villes / zones / pay
 | `OK` | rempli à 90 % ou plus |
 | `PARTIEL` | rempli mais < 90 %, la raison est affichée (ex. prix DVF seulement pour les villes avec assez de ventes) |
 | `VIDE` | 0 % alors qu'un script devrait le remplir : la commande à lancer est indiquée en face |
-| `SANS SRC` | 0 % et aucune source de données dans `immo-data-science` (colonnes `image`, `eligible_zones`, `major_urban_projects`, `attractiveness_rank`, `avg_sale_days`, `avg_relocation_days`, `rental_tension` ; séries `search_time_*`, `sale_time_*`) |
+| `SANS SRC` | 0 % et aucune source de données dans `immo-data-science` (colonnes `image`, `avg_sale_days`, `avg_relocation_days`, `rental_tension` ; séries `search_time_*`, `sale_time_*`) |
 
 Autre contrôle : `python -m pipeline.scripts.audit` (anomalies de séries : sauts trimestriels, valeurs aberrantes).
 

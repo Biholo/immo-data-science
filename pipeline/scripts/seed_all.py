@@ -11,7 +11,7 @@ ONE command to load / refresh the whole Rentium DB from immo-data-science.
 
 Options de contenu :
   --skip-dvf            saute run_dvf (séries DVF département/région/pays + villes)
-  --skip-transactions   saute seed_transactions + seed_city_sale_prices (geo-dvf, ~500 Mo)
+  --skip-transactions   saute seed_transactions + tout ce qui en dérive (prix de vente, fourchettes, volumes par typologie, IDW des fourchettes)
   --skip-poi            saute seed_poi (OpenStreetMap)
   --skip a,b            saute des étapes précises (voir --list)
   --refresh-permit      relance scrape_rental_permit (réseau) avant seed_rent_regulation
@@ -82,7 +82,13 @@ def _steps() -> list[Step]:
           args=["--geo", "city"], group="2. DVF", requires=["@dvf"]),
         S("seed_transactions", "Ventes DVF géolocalisées -> table transactions (geo-dvf)", soft=True,
           group="2b. Ventes DVF"),
+        S("seed_price_range_series", "price_sqm_low / avg / high (P10, moyenne, P90 par trimestre, depuis transactions)", soft=True,
+          group="2b. Ventes DVF"),
+        S("seed_transaction_volume_typology", "transaction_volume_t1..t4 (ventes d'appartements par typologie, depuis geo-dvf)", soft=True,
+          group="2b. Ventes DVF", requires=["dvf-raw/geo-dvf/full-*.csv.gz"]),
         S("seed_city_sale_prices", "cities.median_sale_price / avg_sale_price", soft=True, group="2b. Ventes DVF"),
+        S("interpolate_price_range", "IDW : fourchettes de prix des communes sans ventes (colonnes cities + séries price_sqm_*)", soft=True,
+          group="2b. Ventes DVF"),
 
         # 3. Séries INSEE / DGFiP
         S("seed_pop_series", "population + aging_index", group="3. Séries INSEE / DGFiP",
@@ -127,8 +133,13 @@ def _steps() -> list[Step]:
         S("seed_activity_counts_series", "unemployed_count + retired_count", group="5. Démographie dérivée",
           requires=["csv/base-ic-*/*.CSV"]),
         S("seed_median_age", "median_age", group="5. Démographie dérivée", requires=["csv/base-ic-evol-struct-pop/*.CSV"]),
-        S("seed_tenant_profile", "tenant_profile", group="5. Démographie dérivée",
+        S("seed_tenant_profile", "tenant_profile + tenant_profile_breakdown", group="5. Démographie dérivée",
           requires=["csv/base-ic-evol-struct-pop/*.CSV"]),
+        S("seed_city_breakdowns", "age_pyramid / population_status / housing_type / housing_occupancy / dwelling_size (JSONB)",
+          group="5. Démographie dérivée",
+          requires=["csv/base-ic-evol-struct-pop/*.CSV", "csv/base-ic-activite-residents/*.CSV", "csv/base-ic-logement/*.CSV"]),
+        S("seed_student_breakdown", "student_breakdown (ESR, par type de formation)", soft=True, group="5. Démographie dérivée",
+          requires=["csv/fr-esr-atlas_regional-effectifs-d-etudiants-inscrits_agregeables.csv"]),
 
         # 6. Dérivés (après leurs dépendances)
         S("seed_dashboard_fields", "tenant_rate / demographic_growth_5y / employment_growth", group="6. Champs dérivés"),
@@ -232,7 +243,7 @@ def main() -> int:
     if args.skip_dvf:
         skip |= {"run_dvf_national", "run_dvf_city"}
     if args.skip_transactions:
-        skip |= {"seed_transactions", "seed_city_sale_prices"}
+        skip |= {"seed_transactions", "seed_city_sale_prices", "seed_price_range_series", "seed_transaction_volume_typology", "interpolate_price_range"}
     if args.skip_poi:
         skip.add("seed_poi")
     if args.from_step and args.from_step not in names:

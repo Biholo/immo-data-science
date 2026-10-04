@@ -125,8 +125,9 @@ def upsert_series_and_timeseries(
                     geo_cond, geo_id_param = "administrative_zone_id = %s", az_id
                 else:
                     geo_cond, geo_id_param = "country_id = %s", ctry_id
+                # estimated series (source CALC, from interpolate_price_range) are not ours to update
                 cur.execute(
-                    f"SELECT id FROM series WHERE name = %s AND {geo_cond}",
+                    f"SELECT id FROM series WHERE name = %s AND {geo_cond} AND source::text <> 'CALC'",
                     (serie_def["name"], geo_id_param),
                 )
                 row = cur.fetchone()

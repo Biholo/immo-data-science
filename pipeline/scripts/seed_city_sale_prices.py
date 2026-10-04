@@ -1,6 +1,12 @@
 """
-Fills cities.median_sale_price and cities.avg_sale_price (EUR, whole property)
-from the DVF sales loaded in the `transactions` table.
+Fills cities.median_sale_price and cities.avg_sale_price (EUR, whole property), plus the "low" / "high"
+ends of the market (10th / 90th percentiles) of the sale price and of the price per m2:
+
+  sale_price_low / sale_price_high        EUR, whole property
+  price_per_sqm_low / price_per_sqm_high  EUR/m2
+
+from the DVF sales loaded in the `transactions` table. All of them share the same window and filters, so
+the price gauges of the city page read one consistent snapshot.
 
   window   : the 12 months ending at the latest DVF sale in `transactions`
              (DVF lags by several months, so NOT "today - 12 months")
@@ -36,7 +42,7 @@ AGG_SQL = """
         SELECT MAX(mutation_date) AS mx FROM transactions WHERE source = 'DVF'
     ),
     sales AS (
-        SELECT t.city_id, t.price
+        SELECT t.city_id, t.price, t.price / t.surface AS price_sqm
         FROM transactions t
         JOIN cities c ON c.id = t.city_id
         CROSS JOIN win
@@ -52,7 +58,11 @@ AGG_SQL = """
         city_id,
         ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY price)::numeric, 0)::double precision AS median_price,
         ROUND(AVG(price)::numeric, 0)::double precision                                          AS avg_price,
-        COUNT(*)                                                                                 AS n_sales
+        COUNT(*)                                                                                 AS n_sales,
+        ROUND(PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY price)::numeric, 0)::double precision   AS price_p10,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY price)::numeric, 0)::double precision   AS price_p90,
+        ROUND(PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY price_sqm)::numeric, 0)::double precision AS sqm_p10,
+        ROUND(PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY price_sqm)::numeric, 0)::double precision AS sqm_p90
     FROM sales
     GROUP BY city_id
     HAVING COUNT(*) >= %s
@@ -102,21 +112,25 @@ def main() -> None:
         # Cities of the scope that no longer qualify go back to NULL (idempotent re-run).
         scope_sql = "WHERE department_code = %s" if args.dept else ""
         cur.execute(
-            f"UPDATE cities SET median_sale_price = NULL, avg_sale_price = NULL {scope_sql}",
+            f"UPDATE cities SET median_sale_price = NULL, avg_sale_price = NULL, sale_price_low = NULL, sale_price_high = NULL, price_per_sqm_low = NULL, price_per_sqm_high = NULL {scope_sql}",
             [args.dept] if args.dept else [],
         )
         psycopg2.extras.execute_values(
             cur,
             """
             UPDATE cities SET
-                median_sale_price = data.median_price,
-                avg_sale_price    = data.avg_price,
-                updated_at        = NOW()
-            FROM (VALUES %s) AS data(id, median_price, avg_price)
+                median_sale_price  = data.median_price,
+                avg_sale_price     = data.avg_price,
+                sale_price_low     = data.price_p10,
+                sale_price_high    = data.price_p90,
+                price_per_sqm_low  = data.sqm_p10,
+                price_per_sqm_high = data.sqm_p90,
+                updated_at         = NOW()
+            FROM (VALUES %s) AS data(id, median_price, avg_price, price_p10, price_p90, sqm_p10, sqm_p90)
             WHERE cities.id = data.id
             """,
-            [(r[0], r[1], r[2]) for r in rows],
-            template="(%s, %s::double precision, %s::double precision)",
+            [(r[0], r[1], r[2], r[4], r[5], r[6], r[7]) for r in rows],
+            template="(%s, %s::double precision, %s::double precision, %s::double precision, %s::double precision, %s::double precision, %s::double precision)",
         )
         conn.commit()
         print(f"Done. {len(rows)} cities updated.")

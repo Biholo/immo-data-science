@@ -28,6 +28,19 @@ Rule (first match wins). Labels are French, matching the dashboard examples
 
 Communes with no age-structure row (no population) are left untouched (NULL).
 
+Besides the dominant label, the full distribution is stored in
+cities.tenant_profile_breakdown (JSONB, English keys, percentages summing to 100):
+
+  students             POP1824                      18-24
+  young_professionals  POP2539                      25-39
+  families             POP0002+0305+0610+1117+4054  children + parent-age adults (0-17, 40-54)
+  pre_retirees         POP5564                      55-64
+  retirees             POP6579+POP80P               65+
+
+IMPORTANT: this is a PROXY. It is the age structure of the WHOLE commune population,
+not of the tenant households (INSEE's tenant-by-age-of-reference-person table is not
+in this repo). The frontend labels it accordingly.
+
 This is an approximation, not a measured statistic. Thresholds were eyeballed
 against dept 77 and national percentiles (median commune: s_senior~0.21,
 s_child~0.18, s_prime~0.18). Re-tune if the label mix looks wrong for a region.
@@ -40,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import sys
@@ -84,7 +98,7 @@ def _f(row: list[str], i: int) -> float:
         return 0.0
 
 
-def load_age_shares(csv_dir: Path = CSV_DIR) -> tuple[dict[str, dict[str, float]], int]:
+def load_age_shares(csv_dir: Path = CSV_DIR) -> tuple[dict[str, dict], int]:
     """Returns ({insee_code: {pop, s_young_adult, s_prime, s_child, s_senior}}, year)."""
     found = _latest_year_csv(csv_dir)
     if not found:
@@ -92,8 +106,11 @@ def load_age_shares(csv_dir: Path = CSV_DIR) -> tuple[dict[str, dict[str, float]
     path, year = found
     yy = str(year)[-2:]
 
-    # [pop, p1824, p2539, p0014, p65p]
-    acc: dict[str, list[float]] = defaultdict(lambda: [0.0] * 5)
+    brackets = sorted({b for group in BREAKDOWN_BRACKETS.values() for b in group})
+
+    # [pop, p1824, p2539, p0014, p65p, *brackets]
+    n_base = 5
+    acc: dict[str, list[float]] = defaultdict(lambda: [0.0] * (n_base + len(brackets)))
     with open(path, encoding="utf-8-sig") as f:
         reader = csv.reader(f, delimiter=";")
         header = next(reader)
@@ -104,6 +121,7 @@ def load_age_shares(csv_dir: Path = CSV_DIR) -> tuple[dict[str, dict[str, float]
             header.index(f"P{yy}_POP2539"),
             header.index(f"P{yy}_POP0014"),
             header.index(f"P{yy}_POP65P"),
+            *[header.index(f"P{yy}_{b}") for b in brackets],
         ]
         for row in reader:
             com = row[i_com].strip().zfill(5)
@@ -113,20 +131,36 @@ def load_age_shares(csv_dir: Path = CSV_DIR) -> tuple[dict[str, dict[str, float]
                 a[bi] += _f(row, ci)
 
     out: dict[str, dict[str, float]] = {}
-    for com, (pop, p1824, p2539, p0014, p65p) in acc.items():
+    for com, vals in acc.items():
+        pop, p1824, p2539, p0014, p65p = vals[:n_base]
         if pop <= 0:
             continue
+        by_bracket = dict(zip(brackets, vals[n_base:]))
+        group_sums = {k: sum(by_bracket[b] for b in group) for k, group in BREAKDOWN_BRACKETS.items()}
+        total = sum(group_sums.values())
         out[com] = {
             "pop": pop,
             "s_young_adult": p1824 / pop,
             "s_prime": p2539 / pop,
             "s_child": p0014 / pop,
             "s_senior": p65p / pop,
+            # percentages summing to ~100 (rounded to 1 decimal); empty when brackets are missing
+            "breakdown": {k: round(v / total * 100, 1) for k, v in group_sums.items()} if total > 0 else {},
         }
     return out, year
 
 
-def classify(shares: dict[str, float], r_student: float | None) -> str:
+# English breakdown keys -> INSEE age-bracket columns (without the P{yy}_ prefix)
+BREAKDOWN_BRACKETS: dict[str, tuple[str, ...]] = {
+    "students": ("POP1824",),
+    "young_professionals": ("POP2539",),
+    "families": ("POP0002", "POP0305", "POP0610", "POP1117", "POP4054"),
+    "pre_retirees": ("POP5564",),
+    "retirees": ("POP6579", "POP80P"),
+}
+
+
+def classify(shares: dict, r_student: float | None) -> str:
     if r_student is not None and r_student >= T_STUDENT_RATIO:
         return "etudiants"
     if shares["s_young_adult"] >= T_YOUNG_ADULT:
@@ -174,7 +208,7 @@ def main() -> None:
         city_rows = cur.fetchall()
         print(f"  {len(city_rows)} cities in scope")
 
-        updates: list[tuple[str, str]] = []
+        updates: list[tuple[str, str, str]] = []
         label_counts: Counter[str] = Counter()
         no_age = 0
         for insee, cid, population, student_count in city_rows:
@@ -189,7 +223,7 @@ def main() -> None:
             )
             label = classify(shares, r_student)
             label_counts[label] += 1
-            updates.append((label, cid))
+            updates.append((label, json.dumps(shares["breakdown"]) if shares["breakdown"] else None, cid))
 
         print(f"\n  {len(updates)} cities classified, {no_age} skipped (no age-structure row)")
         print(f"  label distribution: {dict(label_counts)}")
@@ -198,12 +232,12 @@ def main() -> None:
             sample = updates[:15]
             cur.execute(
                 "SELECT id, name FROM cities WHERE id = ANY(%s)",
-                ([c for _, c in sample],),
+                ([c for _, _, c in sample],),
             )
             names = {r[0]: r[1] for r in cur.fetchall()}
             print("\n  sample:")
-            for label, cid in sample:
-                print(f"    {names.get(cid, cid):30s} -> {label}")
+            for label, breakdown, cid in sample:
+                print(f"    {names.get(cid, cid):30s} -> {label:14s} {breakdown}")
             print("\n[DRY RUN] no writes")
             return
 
@@ -211,13 +245,14 @@ def main() -> None:
             cur,
             """
             UPDATE cities SET
-                tenant_profile = data.label,
-                updated_at     = NOW()
-            FROM (VALUES %s) AS data(label, id)
+                tenant_profile           = data.label,
+                tenant_profile_breakdown = data.breakdown::jsonb,
+                updated_at               = NOW()
+            FROM (VALUES %s) AS data(label, breakdown, id)
             WHERE cities.id = data.id
             """,
             updates,
-            template="(%s, %s)",
+            template="(%s, %s, %s)",
         )
         conn.commit()
         print(f"\nDone. {len(updates)} cities updated with tenant_profile.")
